@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#0a0908"/>
+  <g fill="#dc2626" stroke="#dc2626" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="76" y="160" width="44" height="192" rx="14"/>
+    <rect x="392" y="160" width="44" height="192" rx="14"/>
+    <rect x="120" y="200" width="32" height="112" rx="10"/>
+    <rect x="360" y="200" width="32" height="112" rx="10"/>
+    <rect x="152" y="236" width="208" height="40" rx="14"/>
+  </g>
+  <text x="256" y="430" font-family="Arial Black, sans-serif" font-weight="900" font-size="64" fill="#e8e0d5" text-anchor="middle" letter-spacing="4">IRON</text>
+</svg>
