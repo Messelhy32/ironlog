@@ -12,6 +12,17 @@
 const CACHE_KEY = 'ironlog.v1'
 const META_KEY = 'ironlog.v1.meta'   // { updated_at, dirty }
 const PASS_KEY = 'ironlog.v1.pass'
+const SESSION_KEY = 'ironlog.v1.unlocked'
+
+export const isUnlocked = () => {
+  try { return sessionStorage.getItem(SESSION_KEY) === '1' } catch { return false }
+}
+export const markUnlocked = () => {
+  try { sessionStorage.setItem(SESSION_KEY, '1') } catch {}
+}
+export const lockNow = () => {
+  try { sessionStorage.removeItem(SESSION_KEY) } catch {}
+}
 
 export const getPasscode = () => {
   try { return localStorage.getItem(PASS_KEY) || '' } catch { return '' }

@@ -1,9 +1,18 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   DAYS, SCHEDULE, SHIELD, WEIGHTED, quoteOfWeek,
   mondayIndex, mondayOfWeek, dateKey, WEEKDAY_LABELS
 } from './data.js'
-import { loadCache, createSync, getPasscode, setPasscode, clearPasscode } from './storage.js'
+import {
+  loadCache, createSync,
+  getPasscode, setPasscode, clearPasscode,
+  isUnlocked, markUnlocked, lockNow
+} from './storage.js'
+import {
+  supportsBiometric, platformAuthenticatorAvailable,
+  hasBiometric, enrollBiometric, verifyBiometric
+} from './biometric.js'
 
 const THEMES = {
   dark: {
@@ -21,19 +30,26 @@ const accentForDay = id => DAYS.find(d => d.id === id)?.accent || '#dc2626'
 export default function App() {
   const [state, setStateRaw] = useState(loadCache)
   const [tab, setTab] = useState('today')
-  const [status, setStatus] = useState('loading')
-  const [authPrompt, setAuthPrompt] = useState(false)
+  const [status, setStatus] = useState('idle')
+  const [authState, setAuthState] = useState(() => isUnlocked() ? 'unlocked' : 'locked')
   const syncRef = useRef(null)
 
-  // Initialise the sync controller once.
+  // Sync controller — only active when unlocked.
   useEffect(() => {
+    if (authState !== 'unlocked') return
+
     const sync = createSync({
       onStatus: setStatus,
       onRemoteState: (next) => setStateRaw(next),
-      onAuthRequired: () => setAuthPrompt(true)
+      onAuthRequired: () => {
+        // Server rejected our PIN — wipe the bad copy and re-lock.
+        clearPasscode()
+        lockNow()
+        setAuthState('locked')
+      }
     })
     syncRef.current = sync
-    sync.bootstrap().then(initial => setStateRaw(initial))
+    sync.bootstrap().then(initial => initial && setStateRaw(initial))
 
     const onVisible = () => {
       if (document.visibilityState === 'visible') sync.refresh()
@@ -43,22 +59,12 @@ export default function App() {
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('online', onOnline)
     return () => {
+      sync.flushNow()
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('online', onOnline)
     }
-  }, [])
+  }, [authState])
 
-  const submitPasscode = async (val) => {
-    setPasscode(val)
-    setAuthPrompt(false)
-    const sync = syncRef.current
-    if (!sync) return
-    const fresh = await sync.bootstrap()
-    if (fresh) setStateRaw(fresh)
-    sync.flushNow()
-  }
-
-  // Wrapper around setState that also schedules a sync.
   const setState = (next) => {
     setStateRaw(prev => {
       const value = typeof next === 'function' ? next(prev) : next
@@ -66,6 +72,16 @@ export default function App() {
       return value
     })
   }
+
+  const handleUnlocked = ({ pinJustEntered } = {}) => {
+    markUnlocked()
+    if (pinJustEntered && supportsBiometric() && !hasBiometric()) {
+      setAuthState('setup-bio')
+    } else {
+      setAuthState('unlocked')
+    }
+  }
+  const handleLockNow = () => { lockNow(); setAuthState('locked') }
 
   const t = THEMES[state.prefs.theme]
   useEffect(() => {
@@ -83,6 +99,13 @@ export default function App() {
   const toggleUnits = () =>
     setPrefs({ units: state.prefs.units === 'kg' ? 'lbs' : 'kg' })
 
+  if (authState === 'locked') {
+    return <LockScreen t={t} onUnlocked={handleUnlocked} />
+  }
+  if (authState === 'setup-bio') {
+    return <BioSetup t={t} onDone={() => setAuthState('unlocked')} />
+  }
+
   return (
     <div style={{
       minHeight: '100dvh',
@@ -96,7 +119,7 @@ export default function App() {
           status={status}
           onToggleTheme={toggleTheme}
           onToggleUnits={toggleUnits}
-          onEditPasscode={() => setAuthPrompt(true)}
+          onLock={handleLockNow}
           tab={tab} setTab={setTab}
         />
 
@@ -107,99 +130,276 @@ export default function App() {
           {tab === 'prs'     && <PRsView     t={t} state={state} />}
         </main>
       </div>
+    </div>
+  )
+}
 
-      {authPrompt && (
-        <PasscodeSheet
-          t={t}
-          initial={getPasscode()}
-          onCancel={() => setAuthPrompt(false)}
-          onClear={() => { clearPasscode(); setAuthPrompt(false) }}
-          onSave={submitPasscode}
-        />
+/* ─────────── Modal: portal + scroll lock ─────────── */
+
+function Modal({ onCancel, children, zIndex = 80 }) {
+  useEffect(() => {
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = prev }
+  }, [])
+
+  return createPortal(
+    <div onClick={onCancel} style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
+      zIndex, display: 'flex', alignItems: 'flex-end', justifyContent: 'center'
+    }}>
+      {children}
+    </div>,
+    document.body
+  )
+}
+
+/* ─────────── Lock screen + PIN pad + biometrics ─────────── */
+
+function LockScreen({ t, onUnlocked }) {
+  const [shake, setShake] = useState(false)
+  const [bioReady, setBioReady] = useState(false)
+  const [bioBusy, setBioBusy] = useState(false)
+  const [bioError, setBioError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const ok = hasBiometric() && await platformAuthenticatorAvailable()
+      if (!cancelled) setBioReady(ok)
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  const tryBiometric = async () => {
+    setBioBusy(true); setBioError('')
+    try {
+      const ok = await verifyBiometric()
+      if (ok) onUnlocked({ pinJustEntered: false })
+    } catch (e) {
+      setBioError('Face ID failed — use PIN instead.')
+    } finally {
+      setBioBusy(false)
+    }
+  }
+
+  const tryPin = async (pin) => {
+    if (navigator.vibrate) navigator.vibrate(20)
+    // Verify against the server.
+    try {
+      const r = await fetch('/api/state', {
+        headers: { authorization: `Bearer ${pin}` }
+      })
+      if (r.ok) {
+        setPasscode(pin)
+        onUnlocked({ pinJustEntered: true })
+        return true
+      }
+      if (r.status === 401) {
+        if (navigator.vibrate) navigator.vibrate([60, 30, 60])
+        setShake(true); setTimeout(() => setShake(false), 400)
+        return false
+      }
+    } catch {
+      // Offline: accept if it matches what we already had.
+      const stored = getPasscode()
+      if (stored && stored === pin) {
+        onUnlocked({ pinJustEntered: false })
+        return true
+      }
+    }
+    setShake(true); setTimeout(() => setShake(false), 400)
+    return false
+  }
+
+  return (
+    <div style={{
+      minHeight: '100dvh', background: t.pageBg, color: t.text,
+      display: 'flex', flexDirection: 'column', alignItems: 'center',
+      justifyContent: 'center',
+      padding: 'calc(env(safe-area-inset-top) + 24px) 18px calc(env(safe-area-inset-bottom) + 24px)'
+    }}>
+      <h1 className="heading" style={{
+        fontSize: 30, fontWeight: 800, letterSpacing: '0.22em',
+        marginBottom: 4, color: t.text
+      }}>
+        <span style={{ color: t.accent }}>IRON</span> LOG
+      </h1>
+      <div style={{ color: t.sub, fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', marginBottom: 36 }}>
+        Locked
+      </div>
+
+      {bioReady && (
+        <button onClick={tryBiometric} disabled={bioBusy}
+          className="no-select"
+          style={{
+            display: 'flex', flexDirection: 'column', alignItems: 'center',
+            gap: 8, marginBottom: 28,
+            background: 'transparent', color: t.text
+          }}>
+          <div style={{
+            width: 64, height: 64, borderRadius: 999,
+            background: t.card, border: `1px solid ${t.border}`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 30
+          }}>{bioBusy ? '…' : '🫆'}</div>
+          <div className="heading" style={{
+            fontSize: 11, letterSpacing: '0.18em', color: t.sub
+          }}>{bioBusy ? 'WAITING…' : 'TAP FOR FACE ID'}</div>
+        </button>
+      )}
+
+      <div className={shake ? 'shake' : ''}>
+        <PinPad t={t} onSubmit={tryPin} />
+      </div>
+
+      {bioError && (
+        <div style={{ color: t.accent, fontSize: 11, marginTop: 14 }}>{bioError}</div>
       )}
     </div>
   )
 }
 
-function PasscodeSheet({ t, initial, onCancel, onClear, onSave }) {
-  const [val, setVal] = useState(initial || '')
-  const submit = (e) => {
-    e?.preventDefault?.()
-    if (!val.trim()) return
-    onSave(val.trim())
+function PinPad({ t, onSubmit }) {
+  const [val, setVal] = useState('')
+  const len = 4
+
+  const submit = async (pin) => {
+    const ok = await onSubmit(pin)
+    if (!ok) setVal('')
   }
+
+  const press = (digit) => {
+    if (val.length >= len) return
+    if (navigator.vibrate) navigator.vibrate(10)
+    const next = val + digit
+    setVal(next)
+    if (next.length === len) submit(next)
+  }
+  const back = () => {
+    if (navigator.vibrate) navigator.vibrate(10)
+    setVal(v => v.slice(0, -1))
+  }
+
+  const keys = [
+    ['1','2','3'],
+    ['4','5','6'],
+    ['7','8','9'],
+    ['',  '0', '⌫']
+  ]
+
   return (
-    <div onClick={onCancel} style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
-      zIndex: 95, display: 'flex', alignItems: 'flex-end', justifyContent: 'center'
+    <div className="no-select">
+      {/* dots */}
+      <div style={{
+        display: 'flex', justifyContent: 'center', gap: 18, marginBottom: 28
+      }}>
+        {Array.from({ length: len }, (_, i) => {
+          const filled = i < val.length
+          return (
+            <span key={i} className={filled ? 'pin-pop' : ''} style={{
+              width: 14, height: 14, borderRadius: 999,
+              background: filled ? t.accent : 'transparent',
+              border: `2px solid ${filled ? t.accent : t.border}`,
+              transition: 'background 0.1s'
+            }} />
+          )
+        })}
+      </div>
+
+      {/* keys */}
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'repeat(3, 76px)',
+        gap: 14, justifyContent: 'center'
+      }}>
+        {keys.flat().map((k, i) => {
+          if (!k) return <span key={i} />
+          if (k === '⌫') return (
+            <button key={i} onClick={back} className="tap-key"
+              style={keyStyle(t, true)}>
+              <span style={{ fontSize: 20 }}>⌫</span>
+            </button>
+          )
+          return (
+            <button key={i} onClick={() => press(k)} className="tap-key heading"
+              style={keyStyle(t, false)}>{k}</button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+const keyStyle = (t, ghost) => ({
+  width: 76, height: 76, borderRadius: 999,
+  background: ghost ? 'transparent' : t.card,
+  border: ghost ? 'none' : `1px solid ${t.border}`,
+  color: t.text,
+  fontFamily: 'Unbounded, sans-serif',
+  fontSize: 28, fontWeight: 600,
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center'
+})
+
+function BioSetup({ t, onDone }) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const [supported, setSupported] = useState(true)
+
+  useEffect(() => {
+    platformAuthenticatorAvailable().then(setSupported)
+  }, [])
+
+  const enable = async () => {
+    setBusy(true); setErr('')
+    try {
+      await enrollBiometric()
+      onDone()
+    } catch (e) {
+      setErr('Could not enable Face ID. Try again or skip.')
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <div style={{
+      minHeight: '100dvh', background: t.pageBg, color: t.text,
+      display: 'flex', flexDirection: 'column', alignItems: 'center',
+      justifyContent: 'center', textAlign: 'center',
+      padding: 'calc(env(safe-area-inset-top) + 24px) 24px calc(env(safe-area-inset-bottom) + 24px)'
     }}>
-      <form onSubmit={submit} onClick={e => e.stopPropagation()} className="sheet-enter"
-        style={{
-          width: '100%', maxWidth: 560,
-          background: t.card, color: t.text,
-          borderTopLeftRadius: 20, borderTopRightRadius: 20,
-          borderTop: `1px solid ${t.border}`,
-          padding: '18px 18px calc(env(safe-area-inset-bottom) + 28px)',
-          boxShadow: '0 -10px 40px rgba(0,0,0,0.5)'
-        }}>
-        <div style={{
-          width: 40, height: 4, borderRadius: 4, background: t.border,
-          margin: '0 auto 14px'
-        }} />
-        <div className="heading" style={{
-          fontSize: 11, letterSpacing: '0.2em', color: t.sub
-        }}>🔒 PASSCODE</div>
-        <div className="heading" style={{ fontSize: 18, fontWeight: 700, marginTop: 4 }}>
-          {initial ? 'Change passcode' : 'Enter passcode'}
-        </div>
-        <div style={{ color: t.sub, fontSize: 12, marginTop: 4 }}>
-          Required to read &amp; save your data.
-        </div>
+      <div style={{ fontSize: 64 }}>🫆</div>
+      <h1 className="heading" style={{
+        fontSize: 22, fontWeight: 800, letterSpacing: '0.06em', marginTop: 20
+      }}>Enable Face ID?</h1>
+      <p style={{ color: t.sub, fontSize: 14, lineHeight: 1.5, marginTop: 12, maxWidth: 320 }}>
+        Skip the PIN next time. Your face never leaves this device — IRON LOG just asks the OS if it's you.
+      </p>
+      {!supported && (
+        <p style={{ color: t.sub, fontSize: 11, marginTop: 12 }}>
+          (Not available on this device — you can skip.)
+        </p>
+      )}
+      {err && <p style={{ color: t.accent, fontSize: 12, marginTop: 14 }}>{err}</p>}
 
-        <input
-          autoFocus type="password" inputMode="text"
-          value={val}
-          onChange={e => setVal(e.target.value)}
-          placeholder="••••••••"
-          style={{
-            width: '100%',
-            fontFamily: 'DM Mono',
-            fontSize: 18, fontWeight: 500, padding: '14px 16px',
-            background: t.input, color: t.text,
-            border: `1px solid ${t.border}`, borderRadius: 12, outline: 'none',
-            marginTop: 16
-          }}
-        />
-
-        <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-          <button type="button" onClick={onCancel} className="heading" style={{
-            flex: 1, padding: '14px 0', borderRadius: 12,
-            background: t.soft, border: `1px solid ${t.border}`,
-            color: t.text, fontWeight: 700, letterSpacing: '0.06em', fontSize: 13
-          }}>CANCEL</button>
-          <button type="submit" className="heading" style={{
-            flex: 2, padding: '14px 0', borderRadius: 12,
-            background: t.accent, color: '#fff',
-            fontWeight: 800, letterSpacing: '0.06em', fontSize: 13
-          }}>UNLOCK</button>
-        </div>
-
-        {initial && (
-          <button type="button" onClick={onClear} style={{
-            marginTop: 10, width: '100%', padding: 10,
-            color: t.sub, fontSize: 11, letterSpacing: '0.1em',
-            textTransform: 'uppercase'
-          }}>Forget passcode on this device</button>
-        )}
-      </form>
+      <div style={{ display: 'flex', gap: 10, marginTop: 28, width: '100%', maxWidth: 360 }}>
+        <button onClick={onDone} className="heading" style={{
+          flex: 1, padding: '14px 0', borderRadius: 12,
+          background: t.soft, border: `1px solid ${t.border}`,
+          color: t.text, fontWeight: 700, letterSpacing: '0.06em', fontSize: 13
+        }}>SKIP</button>
+        <button onClick={enable} disabled={busy || !supported} className="heading" style={{
+          flex: 2, padding: '14px 0', borderRadius: 12,
+          background: t.accent, color: '#fff',
+          fontWeight: 800, letterSpacing: '0.06em', fontSize: 13,
+          opacity: (busy || !supported) ? 0.6 : 1
+        }}>{busy ? 'WAITING…' : 'ENABLE FACE ID'}</button>
+      </div>
     </div>
   )
 }
 
 /* ─────────────────── Header ─────────────────── */
 
-function Header({ t, state, status, onToggleTheme, onToggleUnits, onEditPasscode, tab, setTab }) {
-  const hasPasscode = !!getPasscode()
+function Header({ t, state, status, onToggleTheme, onToggleUnits, onLock, tab, setTab }) {
   return (
     <header style={{
       position: 'sticky', top: 0, zIndex: 30,
@@ -218,9 +418,7 @@ function Header({ t, state, status, onToggleTheme, onToggleUnits, onEditPasscode
           <SyncDot t={t} status={status} />
         </h1>
         <div style={{ display: 'flex', gap: 6 }}>
-          <IconBtn t={t} title="Passcode" onClick={onEditPasscode}>
-            {hasPasscode ? '🔒' : '🔓'}
-          </IconBtn>
+          <IconBtn t={t} title="Lock now" onClick={onLock}>🔒</IconBtn>
           <IconBtn t={t} title="Units" onClick={onToggleUnits}>
             <span style={{ fontFamily: 'Unbounded', fontSize: 11, fontWeight: 700 }}>
               {state.prefs.units.toUpperCase()}
@@ -557,17 +755,16 @@ function WeightSheet({ t, item, units, initial, onCancel, onSave }) {
     onSave(n)
   }
   return (
-    <div onClick={onCancel} style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
-      zIndex: 80, display: 'flex', alignItems: 'flex-end', justifyContent: 'center'
-    }}>
+    <Modal onCancel={onCancel}>
       <form onSubmit={submit} onClick={e => e.stopPropagation()} className="sheet-enter"
         style={{
           width: '100%', maxWidth: 560,
           background: t.card, color: t.text,
           borderTopLeftRadius: 20, borderTopRightRadius: 20,
           borderTop: `1px solid ${t.border}`,
-          padding: '18px 18px 28px', boxShadow: '0 -10px 40px rgba(0,0,0,0.5)'
+          padding: '18px 18px calc(env(safe-area-inset-bottom) + 28px)',
+          boxShadow: '0 -10px 40px rgba(0,0,0,0.5)',
+          maxHeight: '85vh', overflowY: 'auto'
         }}>
         <div style={{
           width: 40, height: 4, borderRadius: 4, background: t.border,
@@ -611,7 +808,7 @@ function WeightSheet({ t, item, units, initial, onCancel, onSave }) {
           }} className="heading">SAVE LIFT</button>
         </div>
       </form>
-    </div>
+    </Modal>
   )
 }
 
