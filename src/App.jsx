@@ -1,9 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   DAYS, SCHEDULE, SHIELD, WEIGHTED, quoteOfWeek,
   mondayIndex, mondayOfWeek, dateKey, WEEKDAY_LABELS
 } from './data.js'
-import { loadAll, saveAll, exportBackup, importBackup } from './storage.js'
+import { loadCache, createSync } from './storage.js'
 
 const THEMES = {
   dark: {
@@ -19,12 +19,41 @@ const THEMES = {
 const accentForDay = id => DAYS.find(d => d.id === id)?.accent || '#dc2626'
 
 export default function App() {
-  const [state, setState] = useState(loadAll)
+  const [state, setStateRaw] = useState(loadCache)
   const [tab, setTab] = useState('today')
-  const [toast, setToast] = useState(null)
+  const [status, setStatus] = useState('loading')
+  const syncRef = useRef(null)
 
-  // Persist on every change
-  useEffect(() => { saveAll(state) }, [state])
+  // Initialise the sync controller once.
+  useEffect(() => {
+    const sync = createSync({
+      onStatus: setStatus,
+      onRemoteState: (next) => setStateRaw(next)
+    })
+    syncRef.current = sync
+    sync.bootstrap().then(initial => setStateRaw(initial))
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') sync.refresh()
+      else sync.flushNow()
+    }
+    const onOnline = () => sync.flushNow()
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('online', onOnline)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('online', onOnline)
+    }
+  }, [])
+
+  // Wrapper around setState that also schedules a sync.
+  const setState = (next) => {
+    setStateRaw(prev => {
+      const value = typeof next === 'function' ? next(prev) : next
+      syncRef.current?.save(value)
+      return value
+    })
+  }
 
   const t = THEMES[state.prefs.theme]
   useEffect(() => {
@@ -42,33 +71,6 @@ export default function App() {
   const toggleUnits = () =>
     setPrefs({ units: state.prefs.units === 'kg' ? 'lbs' : 'kg' })
 
-  const flash = (msg, ms = 1800) => {
-    setToast(msg)
-    setTimeout(() => setToast(null), ms)
-  }
-
-  const handleBackup = async () => {
-    const code = exportBackup(state)
-    try {
-      await navigator.clipboard.writeText(code)
-      flash('Backup copied to clipboard ✓')
-    } catch {
-      window.prompt('Copy this backup string:', code)
-    }
-  }
-
-  const handleRestore = () => {
-    const input = window.prompt('Paste your IRON LOG backup string:')
-    if (!input) return
-    try {
-      const parsed = importBackup(input)
-      setState(parsed)
-      flash('Backup restored ✓')
-    } catch (e) {
-      flash('Invalid backup ✗')
-    }
-  }
-
   return (
     <div style={{
       minHeight: '100dvh',
@@ -79,10 +81,9 @@ export default function App() {
       <div style={{ maxWidth: 560, margin: '0 auto', padding: '0 14px' }}>
         <Header
           t={t} state={state}
+          status={status}
           onToggleTheme={toggleTheme}
           onToggleUnits={toggleUnits}
-          onBackup={handleBackup}
-          onRestore={handleRestore}
           tab={tab} setTab={setTab}
         />
 
@@ -93,23 +94,13 @@ export default function App() {
           {tab === 'prs'     && <PRsView     t={t} state={state} />}
         </main>
       </div>
-
-      {toast && (
-        <div className="fade" style={{
-          position: 'fixed', left: '50%', bottom: 24, transform: 'translateX(-50%)',
-          background: t.card, border: `1px solid ${t.border}`,
-          color: t.text, padding: '10px 16px', borderRadius: 12,
-          fontSize: 13, boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
-          zIndex: 90
-        }}>{toast}</div>
-      )}
     </div>
   )
 }
 
 /* ─────────────────── Header ─────────────────── */
 
-function Header({ t, state, onToggleTheme, onToggleUnits, onBackup, onRestore, tab, setTab }) {
+function Header({ t, state, status, onToggleTheme, onToggleUnits, tab, setTab }) {
   return (
     <header style={{
       position: 'sticky', top: 0, zIndex: 30,
@@ -117,15 +108,15 @@ function Header({ t, state, onToggleTheme, onToggleUnits, onBackup, onRestore, t
       borderBottom: `1px solid ${t.border}`,
       marginBottom: 4
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
         <h1 className="heading" style={{
-          fontSize: 22, fontWeight: 800, letterSpacing: '0.18em', color: t.text
+          fontSize: 22, fontWeight: 800, letterSpacing: '0.18em', color: t.text,
+          display: 'flex', alignItems: 'center', gap: 10
         }}>
-          <span style={{ color: t.accent }}>IRON</span> LOG
+          <span><span style={{ color: t.accent }}>IRON</span> LOG</span>
+          <SyncDot t={t} status={status} />
         </h1>
         <div style={{ display: 'flex', gap: 6 }}>
-          <IconBtn t={t} title="Backup" onClick={onBackup}>💾</IconBtn>
-          <IconBtn t={t} title="Restore" onClick={onRestore}>📥</IconBtn>
           <IconBtn t={t} title="Units" onClick={onToggleUnits}>
             <span style={{ fontFamily: 'Unbounded', fontSize: 11, fontWeight: 700 }}>
               {state.prefs.units.toUpperCase()}
@@ -138,6 +129,33 @@ function Header({ t, state, onToggleTheme, onToggleUnits, onBackup, onRestore, t
       </div>
       <Tabs t={t} tab={tab} setTab={setTab} />
     </header>
+  )
+}
+
+function SyncDot({ t, status }) {
+  const map = {
+    loading: { color: '#d97706', label: 'Loading' },
+    saving:  { color: '#d97706', label: 'Saving…' },
+    synced:  { color: '#16a34a', label: 'Synced' },
+    offline: { color: '#9a9183', label: 'Offline' },
+    error:   { color: '#dc2626', label: 'Error' },
+    idle:    { color: '#9a9183', label: 'Ready' }
+  }
+  const s = map[status] || map.idle
+  return (
+    <span title={s.label} style={{
+      display: 'inline-flex', alignItems: 'center', gap: 6,
+      fontFamily: 'DM Mono', fontSize: 9, fontWeight: 400,
+      letterSpacing: '0.12em', color: t.sub, textTransform: 'uppercase'
+    }}>
+      <span style={{
+        width: 8, height: 8, borderRadius: 999,
+        background: s.color,
+        boxShadow: status === 'saving' ? `0 0 6px ${s.color}` : 'none',
+        transition: 'background 0.2s'
+      }} />
+      {s.label}
+    </span>
   )
 }
 
