@@ -3,7 +3,7 @@ import {
   DAYS, SCHEDULE, SHIELD, WEIGHTED, quoteOfWeek,
   mondayIndex, mondayOfWeek, dateKey, WEEKDAY_LABELS
 } from './data.js'
-import { loadCache, createSync } from './storage.js'
+import { loadCache, createSync, getPasscode, setPasscode, clearPasscode } from './storage.js'
 
 const THEMES = {
   dark: {
@@ -22,13 +22,15 @@ export default function App() {
   const [state, setStateRaw] = useState(loadCache)
   const [tab, setTab] = useState('today')
   const [status, setStatus] = useState('loading')
+  const [authPrompt, setAuthPrompt] = useState(false)
   const syncRef = useRef(null)
 
   // Initialise the sync controller once.
   useEffect(() => {
     const sync = createSync({
       onStatus: setStatus,
-      onRemoteState: (next) => setStateRaw(next)
+      onRemoteState: (next) => setStateRaw(next),
+      onAuthRequired: () => setAuthPrompt(true)
     })
     syncRef.current = sync
     sync.bootstrap().then(initial => setStateRaw(initial))
@@ -45,6 +47,16 @@ export default function App() {
       window.removeEventListener('online', onOnline)
     }
   }, [])
+
+  const submitPasscode = async (val) => {
+    setPasscode(val)
+    setAuthPrompt(false)
+    const sync = syncRef.current
+    if (!sync) return
+    const fresh = await sync.bootstrap()
+    if (fresh) setStateRaw(fresh)
+    sync.flushNow()
+  }
 
   // Wrapper around setState that also schedules a sync.
   const setState = (next) => {
@@ -84,6 +96,7 @@ export default function App() {
           status={status}
           onToggleTheme={toggleTheme}
           onToggleUnits={toggleUnits}
+          onEditPasscode={() => setAuthPrompt(true)}
           tab={tab} setTab={setTab}
         />
 
@@ -94,17 +107,105 @@ export default function App() {
           {tab === 'prs'     && <PRsView     t={t} state={state} />}
         </main>
       </div>
+
+      {authPrompt && (
+        <PasscodeSheet
+          t={t}
+          initial={getPasscode()}
+          onCancel={() => setAuthPrompt(false)}
+          onClear={() => { clearPasscode(); setAuthPrompt(false) }}
+          onSave={submitPasscode}
+        />
+      )}
+    </div>
+  )
+}
+
+function PasscodeSheet({ t, initial, onCancel, onClear, onSave }) {
+  const [val, setVal] = useState(initial || '')
+  const submit = (e) => {
+    e?.preventDefault?.()
+    if (!val.trim()) return
+    onSave(val.trim())
+  }
+  return (
+    <div onClick={onCancel} style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+      zIndex: 95, display: 'flex', alignItems: 'flex-end', justifyContent: 'center'
+    }}>
+      <form onSubmit={submit} onClick={e => e.stopPropagation()} className="sheet-enter"
+        style={{
+          width: '100%', maxWidth: 560,
+          background: t.card, color: t.text,
+          borderTopLeftRadius: 20, borderTopRightRadius: 20,
+          borderTop: `1px solid ${t.border}`,
+          padding: '18px 18px calc(env(safe-area-inset-bottom) + 28px)',
+          boxShadow: '0 -10px 40px rgba(0,0,0,0.5)'
+        }}>
+        <div style={{
+          width: 40, height: 4, borderRadius: 4, background: t.border,
+          margin: '0 auto 14px'
+        }} />
+        <div className="heading" style={{
+          fontSize: 11, letterSpacing: '0.2em', color: t.sub
+        }}>🔒 PASSCODE</div>
+        <div className="heading" style={{ fontSize: 18, fontWeight: 700, marginTop: 4 }}>
+          {initial ? 'Change passcode' : 'Enter passcode'}
+        </div>
+        <div style={{ color: t.sub, fontSize: 12, marginTop: 4 }}>
+          Required to read &amp; save your data.
+        </div>
+
+        <input
+          autoFocus type="password" inputMode="text"
+          value={val}
+          onChange={e => setVal(e.target.value)}
+          placeholder="••••••••"
+          style={{
+            width: '100%',
+            fontFamily: 'DM Mono',
+            fontSize: 18, fontWeight: 500, padding: '14px 16px',
+            background: t.input, color: t.text,
+            border: `1px solid ${t.border}`, borderRadius: 12, outline: 'none',
+            marginTop: 16
+          }}
+        />
+
+        <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+          <button type="button" onClick={onCancel} className="heading" style={{
+            flex: 1, padding: '14px 0', borderRadius: 12,
+            background: t.soft, border: `1px solid ${t.border}`,
+            color: t.text, fontWeight: 700, letterSpacing: '0.06em', fontSize: 13
+          }}>CANCEL</button>
+          <button type="submit" className="heading" style={{
+            flex: 2, padding: '14px 0', borderRadius: 12,
+            background: t.accent, color: '#fff',
+            fontWeight: 800, letterSpacing: '0.06em', fontSize: 13
+          }}>UNLOCK</button>
+        </div>
+
+        {initial && (
+          <button type="button" onClick={onClear} style={{
+            marginTop: 10, width: '100%', padding: 10,
+            color: t.sub, fontSize: 11, letterSpacing: '0.1em',
+            textTransform: 'uppercase'
+          }}>Forget passcode on this device</button>
+        )}
+      </form>
     </div>
   )
 }
 
 /* ─────────────────── Header ─────────────────── */
 
-function Header({ t, state, status, onToggleTheme, onToggleUnits, tab, setTab }) {
+function Header({ t, state, status, onToggleTheme, onToggleUnits, onEditPasscode, tab, setTab }) {
+  const hasPasscode = !!getPasscode()
   return (
     <header style={{
       position: 'sticky', top: 0, zIndex: 30,
-      background: t.pageBg, paddingTop: 14, paddingBottom: 6,
+      background: t.pageBg,
+      paddingTop: 'calc(env(safe-area-inset-top) + 14px)',
+      paddingBottom: 8,
       borderBottom: `1px solid ${t.border}`,
       marginBottom: 4
     }}>
@@ -117,6 +218,9 @@ function Header({ t, state, status, onToggleTheme, onToggleUnits, tab, setTab })
           <SyncDot t={t} status={status} />
         </h1>
         <div style={{ display: 'flex', gap: 6 }}>
+          <IconBtn t={t} title="Passcode" onClick={onEditPasscode}>
+            {hasPasscode ? '🔒' : '🔓'}
+          </IconBtn>
           <IconBtn t={t} title="Units" onClick={onToggleUnits}>
             <span style={{ fontFamily: 'Unbounded', fontSize: 11, fontWeight: 700 }}>
               {state.prefs.units.toUpperCase()}
