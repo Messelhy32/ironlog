@@ -9,6 +9,8 @@
 //   - On every state change: write to cache immediately, then debounced PUT.
 //   - Offline writes queue automatically (we always retry until ok).
 
+import { migrate } from './migration.js'
+
 const CACHE_KEY = 'ironlog.v1'
 const META_KEY = 'ironlog.v1.meta'   // { updated_at, dirty }
 const PASS_KEY = 'ironlog.v1.pass'
@@ -45,24 +47,50 @@ class UnauthorizedError extends Error {
 }
 
 const empty = () => ({
-  prefs: { theme: 'dark', units: 'kg', selectedDay: null },
+  prefs: { theme: 'dark', units: 'kg', selectedDay: null, schemaVersion: 0 },
   sessions: {}
 })
 
-const merge = (parsed) => ({
+const merge = (parsed) => migrate({
   ...empty(),
   ...parsed,
   prefs: { ...empty().prefs, ...(parsed?.prefs || {}) },
-  sessions: { ...(parsed?.sessions || {}) }
+  sessions: { ...(parsed?.sessions || {}) },
+  program: parsed?.program,
+  shield: parsed?.shield
 })
 
 export function loadCache() {
   try {
     const raw = localStorage.getItem(CACHE_KEY)
-    return raw ? merge(JSON.parse(raw)) : empty()
+    return raw ? merge(JSON.parse(raw)) : merge({})
   } catch {
-    return empty()
+    return merge({})
   }
+}
+
+/* ────── Per-exercise lookups (used by Today + WeightSheet pre-fill) ────── */
+
+/** Most-recent weightKg ever logged for this exercise name (any day). */
+export const getLastWeightKg = (state, name) => {
+  let latest = null
+  for (const sess of Object.values(state?.sessions || {})) {
+    const log = sess?.logs?.[name]
+    if (!log || log.weightKg == null) continue
+    if (!latest || (log.ts || 0) > (latest.ts || 0)) latest = log
+  }
+  return latest ? latest.weightKg : null
+}
+
+/** Heaviest weightKg ever logged for this exercise name. */
+export const getPRKg = (state, name) => {
+  let max = null
+  for (const sess of Object.values(state?.sessions || {})) {
+    const log = sess?.logs?.[name]
+    if (!log || log.weightKg == null) continue
+    if (max == null || log.weightKg > max) max = log.weightKg
+  }
+  return max
 }
 
 function loadMeta() {

@@ -1,14 +1,22 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  DAYS, SCHEDULE, SHIELD, WEIGHTED, quoteOfWeek,
-  mondayIndex, mondayOfWeek, dateKey, WEEKDAY_LABELS
+  isWeighted, LIBRARY, quoteOfWeek,
+  mondayIndex, mondayOfWeek, dateKey, prettyDayDate, WEEKDAY_LABELS
 } from './data.js'
 import {
   loadCache, createSync,
   getPasscode, setPasscode, clearPasscode,
-  isUnlocked, markUnlocked, lockNow
+  isUnlocked, markUnlocked, lockNow,
+  getLastWeightKg, getPRKg
 } from './storage.js'
+import {
+  toKg, formatWeight, formatNumber
+} from './units.js'
+import {
+  addExercise, removeExercise, addGroup, removeGroup, renameGroup,
+  resetDay, resetProgram
+} from './program.js'
 import {
   supportsBiometric, platformAuthenticatorAvailable,
   hasBiometric, enrollBiometric, verifyBiometric
@@ -25,7 +33,14 @@ const THEMES = {
   }
 }
 
-const accentForDay = id => DAYS.find(d => d.id === id)?.accent || '#dc2626'
+const accentForDay = (program, id) =>
+  program?.days?.find(d => d.id === id)?.accent || '#dc2626'
+
+// Index in program.days that matches the current weekday (Mon=0..Sun=6).
+const weekdayDayIndex = (program, date = new Date()) => {
+  const i = mondayIndex(date)
+  return Math.min(i, (program?.days?.length || 1) - 1)
+}
 
 export default function App() {
   const [state, setStateRaw] = useState(loadCache)
@@ -97,7 +112,28 @@ export default function App() {
   const toggleTheme = () =>
     setPrefs({ theme: state.prefs.theme === 'dark' ? 'light' : 'dark' })
   const toggleUnits = () =>
-    setPrefs({ units: state.prefs.units === 'kg' ? 'lbs' : 'kg' })
+    setPrefs({ units: state.prefs.units === 'kg' ? 'lb' : 'kg' })
+
+  // Toast queue
+  const [toast, setToast] = useState(null)
+  const toastTimer = useRef(0)
+  const flashToast = (msg, ms = 2500) => {
+    setToast(msg)
+    clearTimeout(toastTimer.current)
+    toastTimer.current = setTimeout(() => setToast(null), ms)
+  }
+
+  // Online indicator
+  const [online, setOnline] = useState(typeof navigator === 'undefined' || navigator.onLine)
+  useEffect(() => {
+    const u = () => setOnline(navigator.onLine)
+    window.addEventListener('online', u)
+    window.addEventListener('offline', u)
+    return () => {
+      window.removeEventListener('online', u)
+      window.removeEventListener('offline', u)
+    }
+  }, [])
 
   if (authState === 'locked') {
     return <LockScreen t={t} onUnlocked={handleUnlocked} />
@@ -117,30 +153,92 @@ export default function App() {
         <Header
           t={t} state={state}
           status={status}
+          streak={computeStreak(state)}
           onToggleTheme={toggleTheme}
           onToggleUnits={toggleUnits}
           onLock={handleLockNow}
           tab={tab} setTab={setTab}
         />
+        {!online && (
+          <div className="heading" style={{
+            background: '#d97706', color: '#fff',
+            padding: '8px 12px', borderRadius: 10,
+            fontSize: 11, letterSpacing: '0.12em', fontWeight: 700,
+            marginTop: 10, textAlign: 'center'
+          }}>OFFLINE — CHANGES SYNC WHEN BACK</div>
+        )}
 
         <main style={{ paddingTop: 14 }}>
-          {tab === 'today'   && <TodayView   t={t} state={state} setState={setState} />}
+          {tab === 'today'   && <TodayView   t={t} state={state} setState={setState} onPRToast={flashToast} />}
           {tab === 'week'    && <WeekView    t={t} state={state} setState={setState} setTab={setTab} />}
           {tab === 'history' && <HistoryView t={t} state={state} />}
           {tab === 'prs'     && <PRsView     t={t} state={state} />}
         </main>
       </div>
+
+      {toast && (
+        <div className="fade" style={{
+          position: 'fixed', left: '50%', bottom: 'calc(env(safe-area-inset-bottom) + 24px)',
+          transform: 'translateX(-50%)',
+          background: t.card, border: `1px solid ${t.accent}`,
+          color: t.text, padding: '12px 18px', borderRadius: 14,
+          fontSize: 13, fontWeight: 600,
+          boxShadow: '0 10px 30px rgba(0,0,0,0.45)',
+          zIndex: 100, maxWidth: 'calc(100vw - 32px)',
+          textAlign: 'center'
+        }}>{toast}</div>
+      )}
     </div>
   )
 }
 
-/* ─────────── Modal: portal + scroll lock ─────────── */
+function computeStreak(state) {
+  const dates = Object.keys(state.sessions || {})
+    .filter(k => !k.startsWith('__'))
+    .filter(k => Object.values(state.sessions[k]?.logs || {}).some(l => l?.done))
+    .sort((a, b) => b.localeCompare(a))
+  if (!dates.length) return 0
+  const today = dateKey(new Date())
+  const yesterday = dateKey(new Date(Date.now() - 86400000))
+  if (dates[0] !== today && dates[0] !== yesterday) return 0
+  let streak = 0
+  let cursor = new Date(dates[0] + 'T12:00:00')
+  for (const d of dates) {
+    if (d === dateKey(cursor)) { streak++; cursor.setDate(cursor.getDate() - 1) }
+    else break
+  }
+  return streak
+}
+
+/* ─────────── Modal: portal + scroll lock + keyboard-aware ─────────── */
 
 function Modal({ onCancel, children, zIndex = 80 }) {
+  const [kbOffset, setKbOffset] = useState(0)
+
   useEffect(() => {
     const prev = document.body.style.overflow
     document.body.style.overflow = 'hidden'
-    return () => { document.body.style.overflow = prev }
+
+    const vv = window.visualViewport
+    let raf = 0
+    const update = () => {
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(() => {
+        if (!vv) { setKbOffset(0); return }
+        // Distance the keyboard occupies from the bottom of the layout viewport.
+        const offset = window.innerHeight - vv.height - vv.offsetTop
+        setKbOffset(Math.max(0, Math.round(offset)))
+      })
+    }
+    update()
+    vv?.addEventListener('resize', update)
+    vv?.addEventListener('scroll', update)
+    return () => {
+      cancelAnimationFrame(raf)
+      vv?.removeEventListener('resize', update)
+      vv?.removeEventListener('scroll', update)
+      document.body.style.overflow = prev
+    }
   }, [])
 
   return createPortal(
@@ -148,7 +246,13 @@ function Modal({ onCancel, children, zIndex = 80 }) {
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
       zIndex, display: 'flex', alignItems: 'flex-end', justifyContent: 'center'
     }}>
-      {children}
+      <div style={{
+        width: '100%', display: 'flex', justifyContent: 'center',
+        transform: `translateY(-${kbOffset}px)`,
+        transition: 'transform 0.18s ease'
+      }}>
+        {children}
+      </div>
     </div>,
     document.body
   )
@@ -399,7 +503,7 @@ function BioSetup({ t, onDone }) {
 
 /* ─────────────────── Header ─────────────────── */
 
-function Header({ t, state, status, onToggleTheme, onToggleUnits, onLock, tab, setTab }) {
+function Header({ t, state, status, streak = 0, onToggleTheme, onToggleUnits, onLock, tab, setTab }) {
   return (
     <header style={{
       position: 'sticky', top: 0, zIndex: 30,
@@ -416,6 +520,12 @@ function Header({ t, state, status, onToggleTheme, onToggleUnits, onLock, tab, s
         }}>
           <span><span style={{ color: t.accent }}>IRON</span> LOG</span>
           <SyncDot t={t} status={status} />
+          {streak >= 2 && (
+            <span title={`${streak}-day streak`} style={{
+              fontFamily: 'DM Mono', fontSize: 10, fontWeight: 500,
+              color: t.sub, letterSpacing: '0.08em'
+            }}>🔥 {streak}</span>
+          )}
         </h1>
         <div style={{ display: 'flex', gap: 6 }}>
           <IconBtn t={t} title="Lock now" onClick={onLock}>🔒</IconBtn>
@@ -510,11 +620,19 @@ function Tabs({ t, tab, setTab }) {
 
 /* ─────────────────── TODAY ─────────────────── */
 
-function TodayView({ t, state, setState }) {
+function TodayView({ t, state, setState, onPRToast }) {
   const today = new Date()
-  const defaultDay = state.prefs.selectedDay || DAYS[mondayIndex(today)].id
+  const program = state.program
+  const days = program?.days || []
+  const todayDayId = days[weekdayDayIndex(program, today)]?.id
+  const defaultDay = state.prefs.selectedDay && days.find(d => d.id === state.prefs.selectedDay)
+    ? state.prefs.selectedDay
+    : todayDayId
   const [activeDay, setActiveDay] = useState(defaultDay)
   const [sheet, setSheet] = useState(null) // { exercise }
+  const [editing, setEditing] = useState(false)
+  const [picker, setPicker] = useState(null) // { groupId }
+  const [resetMenu, setResetMenu] = useState(false)
 
   useEffect(() => {
     if (state.prefs.selectedDay !== activeDay) {
@@ -522,8 +640,8 @@ function TodayView({ t, state, setState }) {
     }
   }, [activeDay])
 
-  const day = DAYS.find(d => d.id === activeDay)
-  const groups = SCHEDULE[activeDay] || []
+  const day = days.find(d => d.id === activeDay) || days[0]
+  const groups = day?.groups || []
   const dKey = dateKey(today)
   const session = state.sessions[dKey]
   const sameDayActive = session?.day === activeDay
@@ -535,12 +653,13 @@ function TodayView({ t, state, setState }) {
   const pct = totalCount ? Math.round((doneCount / totalCount) * 100) : 0
 
   const quote = quoteOfWeek(today)
+  const isRest = (day?.title || '').toLowerCase().includes('rest')
 
   const writeLog = (name, payload) => {
     setState(s => {
-      const day = activeDay
+      const dayKey = activeDay
       const prev = s.sessions[dKey]
-      const sess = prev && prev.day === day ? prev : { day, logs: {} }
+      const sess = prev && prev.day === dayKey ? prev : { day: dayKey, logs: {} }
       const logs = { ...sess.logs }
       if (payload === null) delete logs[name]
       else logs[name] = { ...(logs[name] || {}), ...payload, ts: Date.now() }
@@ -549,26 +668,41 @@ function TodayView({ t, state, setState }) {
   }
 
   const onToggle = (item) => {
+    if (editing) return
     const cur = logs[item.name]
     if (cur?.done) {
       writeLog(item.name, null)
       return
     }
-    if (WEIGHTED.has(item.name)) {
-      setSheet({ exercise: item, prevWeight: cur?.weight || '' })
+    if (item.weighted || isWeighted(item.name)) {
+      setSheet({ exercise: item, prevKg: cur?.weightKg ?? null })
     } else {
       writeLog(item.name, { done: true })
     }
   }
 
+  const onSaveWeight = (kg) => {
+    if (!sheet) return
+    const name = sheet.exercise.name
+    const prevPR = getPRKg(state, name) ?? 0
+    writeLog(name, { done: true, weightKg: kg })
+    setSheet(null)
+    if (kg != null && kg > prevPR && kg > 0) {
+      onPRToast?.(`🏆 New PR — ${name} ${formatWeight(kg, state.prefs.units)}`)
+    }
+  }
+
+  // Editor handlers ─────────────────────────────────────────
+  const editProgram = (mutator) => setState(s => ({ ...s, program: mutator(s.program) }))
+
   return (
     <div className="fade">
       {/* Day picker */}
       <div style={{
-        display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 6,
+        display: 'grid', gridTemplateColumns: `repeat(${days.length}, 1fr)`, gap: 6,
         marginBottom: 14
       }}>
-        {DAYS.map(d => {
+        {days.map(d => {
           const active = d.id === activeDay
           return (
             <button key={d.id} onClick={() => setActiveDay(d.id)}
@@ -586,17 +720,33 @@ function TodayView({ t, state, setState }) {
       </div>
 
       {/* Day header card */}
-      <Card t={t} style={{ marginBottom: 12, borderLeft: `4px solid ${day.accent}` }}>
+      <Card t={t} style={{ marginBottom: 12, borderLeft: `4px solid ${day?.accent || t.accent}` }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ fontSize: 26 }}>{day.emoji}</div>
+          <div style={{ fontSize: 26 }}>{day?.emoji}</div>
           <div style={{ flex: 1 }}>
             <div className="heading" style={{
               fontSize: 11, letterSpacing: '0.18em', color: t.sub
-            }}>{day.id} · {dateKey(today)}</div>
-            <div className="heading" style={{ fontSize: 16, fontWeight: 700 }}>{day.title}</div>
+            }}>{day?.label} · {prettyDayDate(today)}</div>
+            <div className="heading" style={{ fontSize: 16, fontWeight: 700 }}>{day?.title}</div>
           </div>
+          <button onClick={() => setEditing(v => !v)} title={editing ? 'Done' : 'Edit day'}
+            className="heading" style={{
+              padding: '6px 10px', fontSize: 11, fontWeight: 700, letterSpacing: '0.08em',
+              borderRadius: 8,
+              background: editing ? day?.accent : 'transparent',
+              border: `1px solid ${editing ? day?.accent : t.border}`,
+              color: editing ? '#fff' : t.text
+            }}>{editing ? 'DONE' : '✏️ EDIT'}</button>
+          {editing && (
+            <button onClick={() => setResetMenu(true)} title="Reset"
+              style={{
+                width: 36, height: 36, borderRadius: 8,
+                background: 'transparent', border: `1px solid ${t.border}`,
+                color: t.text, fontSize: 14
+              }}>↺</button>
+          )}
         </div>
-        {activeDay !== 'D7' && (
+        {!isRest && !editing && (
           <div style={{ marginTop: 12 }}>
             <div style={{
               display: 'flex', justifyContent: 'space-between',
@@ -610,7 +760,7 @@ function TodayView({ t, state, setState }) {
               border: `1px solid ${t.border}`
             }}>
               <div style={{
-                width: `${pct}%`, height: '100%', background: day.accent,
+                width: `${pct}%`, height: '100%', background: day?.accent || t.accent,
                 transition: 'width 0.25s ease'
               }} />
             </div>
@@ -618,57 +768,115 @@ function TodayView({ t, state, setState }) {
         )}
       </Card>
 
-      {/* Quote of week */}
-      <Card t={t} style={{ marginBottom: 12 }}>
-        <div className="heading" style={{
-          fontSize: 10, letterSpacing: '0.2em', color: t.sub, marginBottom: 6
-        }}>QUOTE OF THE WEEK</div>
-        <div style={{ fontSize: 14, lineHeight: 1.5, color: t.text }}>
-          “{quote.text}”
-          {quote.author && (
-            <span style={{ color: t.sub, marginLeft: 6, fontSize: 12 }}>
-              — {quote.author}
-            </span>
-          )}
-        </div>
-      </Card>
+      {/* Quote of week — hide while editing for focus */}
+      {!editing && (
+        <Card t={t} style={{ marginBottom: 12 }}>
+          <div className="heading" style={{
+            fontSize: 10, letterSpacing: '0.2em', color: t.sub, marginBottom: 6
+          }}>QUOTE OF THE WEEK</div>
+          <div style={{ fontSize: 14, lineHeight: 1.5, color: t.text }}>
+            “{quote.text}”
+            {quote.author && (
+              <span style={{ color: t.sub, marginLeft: 6, fontSize: 12 }}>
+                — {quote.author}
+              </span>
+            )}
+          </div>
+        </Card>
+      )}
 
-      {activeDay === 'D7' ? (
+      {isRest && !editing ? (
         <Card t={t} style={{ textAlign: 'center', padding: '34px 18px' }}>
-          <div style={{ fontSize: 56 }}>💤</div>
+          <div style={{ fontSize: 56 }}>{day?.emoji || '💤'}</div>
           <div className="heading" style={{ fontSize: 18, marginTop: 8, fontWeight: 700 }}>REST DAY</div>
           <div style={{ color: t.sub, marginTop: 8, fontSize: 13 }}>Light walking only. Recover hard.</div>
         </Card>
       ) : (
-        groups.map(g => (
-          <GroupCard key={g.group} t={t} title={g.group} accent={day.accent}>
-            {g.items.map(item => (
-              <ExerciseRow
-                key={item.name}
-                t={t}
-                item={item}
-                log={logs[item.name]}
-                units={state.prefs.units}
-                onToggle={() => onToggle(item)}
-                onEditWeight={() => setSheet({ exercise: item, prevWeight: logs[item.name]?.weight || '' })}
-              />
-            ))}
-          </GroupCard>
-        ))
+        groups.map(grp => {
+          const groupComplete = grp.items.length > 0 &&
+            grp.items.every(it => logs[it.name]?.done)
+          return (
+            <GroupCard key={grp.id} t={t}
+              title={grp.name}
+              accent={day?.accent}
+              complete={!editing && groupComplete}
+              editing={editing}
+              onRename={(name) => editProgram(p => renameGroup(p, day.id, grp.id, name))}
+              onDelete={() => {
+                if (confirm(`Delete group "${grp.name}" and all its items?`))
+                  editProgram(p => removeGroup(p, day.id, grp.id))
+              }}
+              onAddExercise={() => setPicker({ groupId: grp.id })}
+            >
+              {grp.items.map(item => (
+                <ExerciseRow
+                  key={item.id || item.name}
+                  t={t}
+                  item={item}
+                  log={logs[item.name]}
+                  units={state.prefs.units}
+                  pr={getPRKg(state, item.name)}
+                  editing={editing}
+                  onToggle={() => onToggle(item)}
+                  onEditWeight={() => setSheet({ exercise: item, prevKg: logs[item.name]?.weightKg ?? null })}
+                  onDelete={() => editProgram(p => removeExercise(p, day.id, grp.id, item.id))}
+                />
+              ))}
+            </GroupCard>
+          )
+        })
       )}
 
-      <ShieldSection t={t} state={state} dKey={dKey} setState={setState} />
+      {editing && (
+        <button onClick={() => {
+          const name = prompt('New group name?')
+          if (name?.trim()) editProgram(p => addGroup(p, day.id, name.trim()))
+        }} className="heading" style={{
+          width: '100%', padding: 14, marginTop: 4,
+          background: t.card, border: `1px dashed ${t.border}`,
+          borderRadius: 12, color: t.sub,
+          fontSize: 12, letterSpacing: '0.12em', fontWeight: 700
+        }}>+ ADD GROUP</button>
+      )}
+
+      {!editing && <ShieldSection t={t} state={state} dKey={dKey} setState={setState} />}
 
       {sheet && (
         <WeightSheet
           t={t}
           item={sheet.exercise}
           units={state.prefs.units}
-          initial={sheet.prevWeight}
+          initialKg={sheet.prevKg ?? getLastWeightKg(state, sheet.exercise.name)}
           onCancel={() => setSheet(null)}
-          onSave={(weight) => {
-            writeLog(sheet.exercise.name, { done: true, weight, units: state.prefs.units })
-            setSheet(null)
+          onSave={onSaveWeight}
+        />
+      )}
+
+      {picker && (
+        <LibraryPicker
+          t={t}
+          onCancel={() => setPicker(null)}
+          onPick={(item) => {
+            editProgram(p => addExercise(p, day.id, picker.groupId, {
+              name: item.name, detail: item.detail, weighted: !!item.weighted
+            }))
+            setPicker(null)
+          }}
+        />
+      )}
+
+      {resetMenu && (
+        <ResetMenu t={t}
+          onCancel={() => setResetMenu(false)}
+          onResetDay={() => {
+            if (confirm(`Reset ${day?.label} to default?`))
+              editProgram(p => resetDay(p, day.id))
+            setResetMenu(false)
+          }}
+          onResetAll={() => {
+            if (confirm('Reset entire plan to Hybrid Athletic default?'))
+              setState(s => ({ ...s, program: resetProgram() }))
+            setResetMenu(false)
           }}
         />
       )}
@@ -687,57 +895,132 @@ function Card({ t, children, style }) {
   )
 }
 
-function GroupCard({ t, title, children, accent }) {
+function GroupCard({
+  t, title, children, accent, complete, editing,
+  onRename, onDelete, onAddExercise
+}) {
+  const [renameInput, setRenameInput] = useState(null)
+  const borderColor = complete ? '#16a34a' : t.border
   return (
-    <Card t={t} style={{ marginBottom: 10 }}>
+    <Card t={t} style={{
+      marginBottom: 10,
+      border: `1px solid ${borderColor}`,
+      transition: 'border-color 0.2s'
+    }}>
       <div className="heading" style={{
-        fontSize: 11, letterSpacing: '0.2em', color: t.sub, marginBottom: 10,
-        display: 'flex', alignItems: 'center', gap: 8
+        fontSize: 11, letterSpacing: '0.2em', color: complete ? '#16a34a' : t.sub,
+        marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8
       }}>
-        {accent && <span style={{ width: 6, height: 6, borderRadius: 999, background: accent }} />}
-        {title.toUpperCase()}
+        {accent && <span style={{
+          width: 6, height: 6, borderRadius: 999,
+          background: complete ? '#16a34a' : accent
+        }} />}
+        {renameInput != null ? (
+          <input autoFocus value={renameInput}
+            onChange={e => setRenameInput(e.target.value)}
+            onBlur={() => { onRename?.(renameInput); setRenameInput(null) }}
+            onKeyDown={e => {
+              if (e.key === 'Enter') { onRename?.(renameInput); setRenameInput(null) }
+              if (e.key === 'Escape') setRenameInput(null)
+            }}
+            style={{
+              flex: 1, fontFamily: 'Unbounded', fontSize: 11,
+              letterSpacing: '0.2em', textTransform: 'uppercase',
+              padding: '4px 6px', borderRadius: 6,
+              background: t.input, color: t.text,
+              border: `1px solid ${t.border}`, outline: 'none'
+            }}
+          />
+        ) : (
+          <span
+            onClick={editing ? () => setRenameInput(title) : undefined}
+            style={{
+              flex: 1,
+              cursor: editing ? 'text' : 'default',
+              textTransform: 'uppercase'
+            }}>{title}{complete && ' ✓'}</span>
+        )}
+        {editing && (
+          <button onClick={onDelete} title="Delete group" style={{
+            color: t.sub, fontSize: 14, padding: '0 4px'
+          }}>🗑</button>
+        )}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>{children}</div>
+      {editing && (
+        <button onClick={onAddExercise} className="heading" style={{
+          marginTop: 10, width: '100%', padding: 10,
+          background: 'transparent', border: `1px dashed ${t.border}`,
+          borderRadius: 10, color: t.sub,
+          fontSize: 11, letterSpacing: '0.12em', fontWeight: 700
+        }}>+ ADD EXERCISE</button>
+      )}
     </Card>
   )
 }
 
-function ExerciseRow({ t, item, log, units, onToggle, onEditWeight }) {
+function ExerciseRow({ t, item, log, units, pr, editing, onToggle, onEditWeight, onDelete }) {
   const isDone = !!log?.done
-  const isWeighted = WEIGHTED.has(item.name)
+  const weighted = !!item.weighted || isWeighted(item.name)
+  const hasPR = pr != null && pr > 0
+  const isNewPR = isDone && weighted && log?.weightKg != null && log.weightKg > 0 && log.weightKg >= (pr || 0)
+
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 10,
       padding: '8px 4px',
       borderRadius: 10
     }}>
-      <button onClick={onToggle}
-        aria-label={isDone ? 'Mark incomplete' : 'Mark complete'}
-        style={{
+      {editing ? (
+        <button onClick={onDelete} title="Delete" style={{
           width: 26, height: 26, borderRadius: 8,
-          border: `2px solid ${isDone ? '#16a34a' : t.border}`,
-          background: isDone ? '#16a34a' : 'transparent',
-          color: '#fff', fontSize: 14, lineHeight: 1,
-          flexShrink: 0
-        }}
-      >{isDone ? '✓' : ''}</button>
+          border: `2px solid ${t.border}`, background: 'transparent',
+          color: t.accent, fontSize: 14, lineHeight: 1, flexShrink: 0
+        }}>🗑</button>
+      ) : (
+        <button onClick={onToggle}
+          aria-label={isDone ? 'Mark incomplete' : 'Mark complete'}
+          style={{
+            width: 26, height: 26, borderRadius: 8,
+            border: `2px solid ${isDone ? '#16a34a' : t.border}`,
+            background: isDone ? '#16a34a' : 'transparent',
+            color: '#fff', fontSize: 14, lineHeight: 1,
+            flexShrink: 0
+          }}
+        >{isDone ? '✓' : ''}</button>
+      )}
 
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{
           fontSize: 14, color: t.text, fontWeight: 500,
-          textDecoration: isDone ? 'line-through' : 'none',
-          opacity: isDone ? 0.65 : 1
-        }}>{item.name}</div>
+          textDecoration: isDone && !editing ? 'line-through' : 'none',
+          opacity: isDone && !editing ? 0.65 : 1,
+          display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap'
+        }}>
+          <span>{item.name}</span>
+          {!editing && hasPR && weighted && !isNewPR && (
+            <span title={`PR: ${formatWeight(pr, units)}`} style={{ fontSize: 12, opacity: 0.85 }}>🏆</span>
+          )}
+          {!editing && isNewPR && (
+            <span className="pin-pop" style={{
+              fontSize: 9, fontFamily: 'Unbounded', fontWeight: 800,
+              letterSpacing: '0.12em',
+              color: '#fff', background: t.accent,
+              padding: '2px 6px', borderRadius: 6
+            }}>🏆 NEW PR</span>
+          )}
+        </div>
         <div style={{ fontSize: 11, color: t.sub, marginTop: 2 }}>{item.detail}</div>
       </div>
 
-      {isWeighted && isDone && log?.weight != null && (
+      {!editing && weighted && isDone && log?.weightKg != null && (
         <button onClick={onEditWeight} style={{
           fontSize: 12, color: t.text, background: t.soft,
           border: `1px solid ${t.border}`, borderRadius: 8,
-          padding: '4px 8px', fontWeight: 600
+          padding: '4px 8px', fontWeight: 600,
+          fontFamily: 'Unbounded'
         }}>
-          {log.weight}{log.units || units}
+          {formatWeight(log.weightKg, units)}
         </button>
       )}
     </div>
@@ -746,14 +1029,29 @@ function ExerciseRow({ t, item, log, units, onToggle, onEditWeight }) {
 
 /* ─────────── Weight bottom sheet ─────────── */
 
-function WeightSheet({ t, item, units, initial, onCancel, onSave }) {
-  const [val, setVal] = useState(String(initial || ''))
+function WeightSheet({ t, item, units, initialKg, onCancel, onSave }) {
+  // "Working unit" — defaults to global pref but user can flip *per entry*.
+  const [unit, setUnit] = useState(units || 'kg')
+  const [val, setVal] = useState(() => formatNumber(initialKg, units || 'kg'))
+
+  const flipUnit = (next) => {
+    if (next === unit) return
+    // Re-render the input value in the new unit, preserving the kg amount.
+    const kg = toKg(val, unit)
+    setUnit(next)
+    setVal(kg == null ? '' : formatNumber(kg, next))
+  }
+
   const submit = (e) => {
     e?.preventDefault?.()
-    const n = Number(val)
-    if (!Number.isFinite(n) || n <= 0) return
-    onSave(n)
+    if (val === '') return
+    const kg = toKg(val, unit)
+    if (kg == null || !Number.isFinite(kg) || kg < 0) return
+    onSave(kg)
   }
+
+  const setBW = () => onSave(0)
+
   return (
     <Modal onCancel={onCancel}>
       <form onSubmit={submit} onClick={e => e.stopPropagation()} className="sheet-enter"
@@ -764,21 +1062,45 @@ function WeightSheet({ t, item, units, initial, onCancel, onSave }) {
           borderTop: `1px solid ${t.border}`,
           padding: '18px 18px calc(env(safe-area-inset-bottom) + 28px)',
           boxShadow: '0 -10px 40px rgba(0,0,0,0.5)',
-          maxHeight: '85vh', overflowY: 'auto'
+          maxHeight: 'calc(100dvh - 60px)', overflowY: 'auto'
         }}>
         <div style={{
           width: 40, height: 4, borderRadius: 4, background: t.border,
           margin: '0 auto 14px'
         }} />
-        <div className="heading" style={{
-          fontSize: 11, letterSpacing: '0.2em', color: t.sub
-        }}>WEIGHT USED</div>
-        <div className="heading" style={{ fontSize: 20, fontWeight: 700, marginTop: 4 }}>{item.name}</div>
-        <div style={{ color: t.sub, fontSize: 12, marginTop: 2 }}>{item.detail}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ flex: 1 }}>
+            <div className="heading" style={{
+              fontSize: 11, letterSpacing: '0.2em', color: t.sub
+            }}>WEIGHT USED</div>
+            <div className="heading" style={{ fontSize: 20, fontWeight: 700, marginTop: 4 }}>{item.name}</div>
+            <div style={{ color: t.sub, fontSize: 12, marginTop: 2 }}>{item.detail}</div>
+          </div>
+          {/* KG | LB pill */}
+          <div style={{
+            display: 'inline-flex', borderRadius: 999,
+            background: t.soft, border: `1px solid ${t.border}`,
+            padding: 3
+          }}>
+            {['kg','lb'].map(u => {
+              const active = u === unit
+              return (
+                <button key={u} type="button" onClick={() => flipUnit(u)}
+                  className="heading"
+                  style={{
+                    padding: '6px 14px', fontSize: 11, fontWeight: 700,
+                    letterSpacing: '0.1em', borderRadius: 999,
+                    background: active ? t.accent : 'transparent',
+                    color: active ? '#fff' : t.sub
+                  }}>{u.toUpperCase()}</button>
+              )
+            })}
+          </div>
+        </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 18 }}>
           <input
-            autoFocus type="number" inputMode="decimal" step="0.5"
+            autoFocus type="number" inputMode="decimal" step="0.5" min="0"
             value={val}
             onChange={e => setVal(e.target.value)}
             placeholder="0"
@@ -792,8 +1114,14 @@ function WeightSheet({ t, item, units, initial, onCancel, onSave }) {
           />
           <div className="heading" style={{
             fontSize: 16, fontWeight: 700, color: t.sub, padding: '0 6px'
-          }}>{units.toUpperCase()}</div>
+          }}>{unit.toUpperCase()}</div>
         </div>
+
+        <button type="button" onClick={setBW} className="heading" style={{
+          width: '100%', marginTop: 10, padding: 12, borderRadius: 10,
+          background: 'transparent', border: `1px solid ${t.border}`,
+          color: t.sub, fontSize: 11, letterSpacing: '0.18em', fontWeight: 700
+        }}>BODYWEIGHT (NO LOAD)</button>
 
         <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
           <button type="button" onClick={onCancel} style={{
@@ -811,6 +1139,174 @@ function WeightSheet({ t, item, units, initial, onCancel, onSave }) {
     </Modal>
   )
 }
+
+/* ─────────── Library Picker ─────────── */
+
+function LibraryPicker({ t, onCancel, onPick }) {
+  const [query, setQuery] = useState('')
+  const [custom, setCustom] = useState(false)
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return LIBRARY
+    return LIBRARY.filter(x => x.name.toLowerCase().includes(q))
+  }, [query])
+
+  if (custom) return <CustomExercise t={t} onCancel={() => setCustom(false)} onSave={onPick} />
+
+  return (
+    <Modal onCancel={onCancel}>
+      <div onClick={e => e.stopPropagation()} className="sheet-enter" style={{
+        width: '100%', maxWidth: 560,
+        background: t.card, color: t.text,
+        borderTopLeftRadius: 20, borderTopRightRadius: 20,
+        borderTop: `1px solid ${t.border}`,
+        padding: '14px 14px calc(env(safe-area-inset-bottom) + 14px)',
+        boxShadow: '0 -10px 40px rgba(0,0,0,0.5)',
+        display: 'flex', flexDirection: 'column',
+        maxHeight: 'calc(100dvh - 60px)'
+      }}>
+        <div style={{
+          width: 40, height: 4, borderRadius: 4, background: t.border,
+          margin: '0 auto 10px'
+        }} />
+        <div className="heading" style={{ fontSize: 11, letterSpacing: '0.2em', color: t.sub }}>EXERCISE LIBRARY</div>
+        <input autoFocus type="search" value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder="Search exercises…"
+          style={{
+            marginTop: 10,
+            width: '100%', padding: '12px 14px',
+            fontSize: 14, fontFamily: 'DM Mono',
+            background: t.input, color: t.text,
+            border: `1px solid ${t.border}`, borderRadius: 12, outline: 'none'
+          }} />
+        <div style={{ flex: 1, overflowY: 'auto', marginTop: 10, marginBottom: 10 }}>
+          {filtered.map(item => (
+            <button key={item.name} onClick={() => onPick(item)} style={{
+              width: '100%', textAlign: 'left',
+              display: 'flex', alignItems: 'center', gap: 10,
+              padding: '10px 8px', borderRadius: 10,
+              background: 'transparent', color: t.text,
+              borderBottom: `1px solid ${t.border}`
+            }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 14, fontWeight: 600 }}>
+                  {item.name} {item.weighted && <span title="Weighted">⚖️</span>}
+                </div>
+                <div style={{ fontSize: 11, color: t.sub, marginTop: 2 }}>{item.detail}</div>
+              </div>
+            </button>
+          ))}
+          {!filtered.length && (
+            <div style={{ padding: 24, textAlign: 'center', color: t.sub, fontSize: 13 }}>
+              No matches.
+            </div>
+          )}
+        </div>
+        <button onClick={() => setCustom(true)} className="heading" style={{
+          width: '100%', padding: 14, borderRadius: 12,
+          background: t.soft, border: `1px solid ${t.border}`,
+          color: t.text, fontWeight: 700, letterSpacing: '0.08em', fontSize: 12
+        }}>+ CUSTOM EXERCISE</button>
+      </div>
+    </Modal>
+  )
+}
+
+function CustomExercise({ t, onCancel, onSave }) {
+  const [name, setName] = useState('')
+  const [detail, setDetail] = useState('')
+  const [weighted, setWeighted] = useState(false)
+  const submit = (e) => {
+    e?.preventDefault?.()
+    if (!name.trim()) return
+    onSave({ name: name.trim(), detail: detail.trim() || '—', weighted })
+  }
+  return (
+    <Modal onCancel={onCancel}>
+      <form onSubmit={submit} onClick={e => e.stopPropagation()} className="sheet-enter" style={{
+        width: '100%', maxWidth: 560,
+        background: t.card, color: t.text,
+        borderTopLeftRadius: 20, borderTopRightRadius: 20,
+        borderTop: `1px solid ${t.border}`,
+        padding: '18px 18px calc(env(safe-area-inset-bottom) + 28px)',
+        boxShadow: '0 -10px 40px rgba(0,0,0,0.5)'
+      }}>
+        <div style={{
+          width: 40, height: 4, borderRadius: 4, background: t.border,
+          margin: '0 auto 14px'
+        }} />
+        <div className="heading" style={{ fontSize: 11, letterSpacing: '0.2em', color: t.sub }}>CUSTOM EXERCISE</div>
+        <input autoFocus value={name} onChange={e => setName(e.target.value)}
+          placeholder="Exercise name (e.g. Goblet Squat)" style={inputStyle(t)} />
+        <input value={detail} onChange={e => setDetail(e.target.value)}
+          placeholder="Sets×reps or duration (e.g. 3×10)" style={{ ...inputStyle(t), marginTop: 10 }} />
+        <label style={{
+          display: 'flex', alignItems: 'center', gap: 10,
+          marginTop: 14, fontSize: 13, color: t.text, cursor: 'pointer'
+        }}>
+          <input type="checkbox" checked={weighted}
+            onChange={e => setWeighted(e.target.checked)}
+            style={{ width: 18, height: 18 }} />
+          Weighted (asks for weight when ticked)
+        </label>
+        <div style={{ display: 'flex', gap: 8, marginTop: 18 }}>
+          <button type="button" onClick={onCancel} className="heading" style={{
+            flex: 1, padding: '14px 0', borderRadius: 12,
+            background: t.soft, border: `1px solid ${t.border}`,
+            color: t.text, fontWeight: 700, letterSpacing: '0.06em', fontSize: 13
+          }}>CANCEL</button>
+          <button type="submit" className="heading" style={{
+            flex: 2, padding: '14px 0', borderRadius: 12,
+            background: t.accent, color: '#fff',
+            fontWeight: 800, letterSpacing: '0.06em', fontSize: 13
+          }}>ADD</button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+function ResetMenu({ t, onCancel, onResetDay, onResetAll }) {
+  return (
+    <Modal onCancel={onCancel}>
+      <div onClick={e => e.stopPropagation()} className="sheet-enter" style={{
+        width: '100%', maxWidth: 560,
+        background: t.card, color: t.text,
+        borderTopLeftRadius: 20, borderTopRightRadius: 20,
+        borderTop: `1px solid ${t.border}`,
+        padding: '18px 18px calc(env(safe-area-inset-bottom) + 18px)',
+        boxShadow: '0 -10px 40px rgba(0,0,0,0.5)'
+      }}>
+        <div style={{
+          width: 40, height: 4, borderRadius: 4, background: t.border,
+          margin: '0 auto 14px'
+        }} />
+        <div className="heading" style={{ fontSize: 11, letterSpacing: '0.2em', color: t.sub }}>RESET</div>
+        <button onClick={onResetDay} className="heading" style={resetBtnStyle(t)}>↺ RESET THIS DAY TO DEFAULT</button>
+        <button onClick={onResetAll} className="heading" style={{ ...resetBtnStyle(t), color: t.accent, borderColor: t.accent }}>↺ RESET ENTIRE PLAN</button>
+        <button onClick={onCancel} className="heading" style={{
+          width: '100%', padding: '14px 0', marginTop: 6, borderRadius: 12,
+          background: 'transparent', color: t.sub,
+          fontWeight: 600, letterSpacing: '0.06em', fontSize: 12
+        }}>CANCEL</button>
+      </div>
+    </Modal>
+  )
+}
+
+const inputStyle = (t) => ({
+  width: '100%', padding: '12px 14px',
+  fontSize: 15, fontFamily: 'DM Mono',
+  background: t.input, color: t.text,
+  border: `1px solid ${t.border}`, borderRadius: 12, outline: 'none'
+})
+
+const resetBtnStyle = (t) => ({
+  width: '100%', padding: '14px 0', marginTop: 8, borderRadius: 12,
+  background: t.soft, border: `1px solid ${t.border}`,
+  color: t.text, fontWeight: 700, letterSpacing: '0.06em', fontSize: 13
+})
 
 /* ─────────── Posture Shield ─────────── */
 
@@ -833,16 +1329,16 @@ function ShieldSection({ t, state, dKey, setState }) {
         fontSize: 12, letterSpacing: '0.18em', fontWeight: 700, marginBottom: 4
       }}>🛡️ DAILY POSTURE SHIELD</div>
       <div style={{ fontSize: 11, color: t.sub, marginBottom: 12 }}>Do every day to bulletproof joints.</div>
-      {SHIELD.map(g => (
-        <div key={g.group} style={{ marginBottom: 10 }}>
+      {(state.shield || []).map(g => (
+        <div key={g.id || g.name} style={{ marginBottom: 10 }}>
           <div className="heading" style={{
             fontSize: 11, letterSpacing: '0.12em', color: t.sub, marginBottom: 6
-          }}>{g.group}</div>
+          }}>{g.name}</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {g.items.map(item => {
               const done = !!checks[item.name]?.done
               return (
-                <button key={item.name} onClick={() => toggle(item.name)} style={{
+                <button key={item.id || item.name} onClick={() => toggle(item.name)} style={{
                   display: 'flex', alignItems: 'center', gap: 10,
                   padding: '6px 4px', borderRadius: 8, textAlign: 'left'
                 }}>
@@ -874,10 +1370,11 @@ function WeekView({ t, state, setState, setTab }) {
   const today = new Date()
   const monday = mondayOfWeek(today)
   const todayIdx = mondayIndex(today)
+  const programDays = state.program?.days || []
 
   const days = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(monday); d.setDate(monday.getDate() + i)
-    return { date: d, key: dateKey(d), idx: i, dayDef: DAYS[i] }
+    return { date: d, key: dateKey(d), idx: i, dayDef: programDays[i] || programDays[0] }
   })
 
   const goToDay = (dayId) => {
@@ -889,44 +1386,46 @@ function WeekView({ t, state, setState, setTab }) {
     <div className="fade">
       <div className="heading" style={{
         fontSize: 12, letterSpacing: '0.2em', color: t.sub, marginBottom: 10
-      }}>THIS WEEK · {WEEKDAY_LABELS[todayIdx]} {dateKey(today)}</div>
+      }}>THIS WEEK · {WEEKDAY_LABELS[todayIdx]} {prettyDayDate(today)}</div>
 
       <div style={{
         display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 6,
         marginBottom: 18
       }}>
         {days.map(d => {
+          const dayDef = d.dayDef
+          if (!dayDef) return null
           const sess = state.sessions[d.key]
-          const matchesPlan = sess && sess.day === d.dayDef.id
-          const total = SCHEDULE[d.dayDef.id]?.reduce((a, g) => a + g.items.length, 0) || 0
+          const matchesPlan = sess && sess.day === dayDef.id
+          const total = (dayDef.groups || []).reduce((a, g) => a + g.items.length, 0)
           const done = matchesPlan ? Object.values(sess.logs || {}).filter(l => l.done).length : 0
           const isToday = d.idx === todayIdx
           const complete = total > 0 && done >= total
 
           return (
-            <button key={d.key} onClick={() => goToDay(d.dayDef.id)}
+            <button key={d.key} onClick={() => goToDay(dayDef.id)}
               className={complete && isToday ? 'pulse-today' : ''}
               style={{
                 background: t.card,
-                border: `1px solid ${complete ? d.dayDef.accent : t.border}`,
+                border: `1px solid ${complete ? dayDef.accent : t.border}`,
                 borderRadius: 12, padding: '12px 4px',
                 position: 'relative',
-                boxShadow: complete ? `inset 0 0 0 2px ${d.dayDef.accent}33` : 'none'
+                boxShadow: complete ? `inset 0 0 0 2px ${dayDef.accent}33` : 'none'
               }}>
               {isToday && (
                 <span style={{
                   position: 'absolute', top: 6, right: 6,
                   width: 6, height: 6, borderRadius: 999,
-                  background: d.dayDef.accent
+                  background: dayDef.accent
                 }} />
               )}
-              <div style={{ fontSize: 18 }}>{d.dayDef.emoji}</div>
+              <div style={{ fontSize: 18 }}>{dayDef.emoji}</div>
               <div className="heading" style={{
                 fontSize: 10, letterSpacing: '0.1em', marginTop: 4, color: t.sub
               }}>{WEEKDAY_LABELS[d.idx]}</div>
               <div className="heading" style={{
                 fontSize: 12, fontWeight: 700, color: t.text, marginTop: 2
-              }}>{d.dayDef.id}</div>
+              }}>{dayDef.label}</div>
               <div style={{ fontSize: 10, color: t.sub, marginTop: 4 }}>
                 {total ? `${done}/${total}` : '—'}
               </div>
@@ -939,7 +1438,7 @@ function WeekView({ t, state, setState, setTab }) {
         fontSize: 11, letterSpacing: '0.2em', color: t.sub, marginBottom: 8
       }}>FULL WEEK PLAN</div>
 
-      {DAYS.map(d => (
+      {programDays.map(d => (
         <button key={d.id} onClick={() => goToDay(d.id)} style={{
           width: '100%', textAlign: 'left',
           background: t.card, border: `1px solid ${t.border}`,
@@ -950,9 +1449,9 @@ function WeekView({ t, state, setState, setTab }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ fontSize: 22 }}>{d.emoji}</span>
             <div style={{ flex: 1 }}>
-              <div className="heading" style={{ fontSize: 13, fontWeight: 700 }}>{d.id} — {d.title}</div>
+              <div className="heading" style={{ fontSize: 13, fontWeight: 700 }}>{d.label} — {d.title}</div>
               <div style={{ fontSize: 11, color: t.sub, marginTop: 4 }}>
-                {(SCHEDULE[d.id] || []).map(g => g.group).join(' · ')}
+                {(d.groups || []).map(g => g.name).join(' · ')}
               </div>
             </div>
             <span style={{ color: t.sub, fontSize: 16 }}>›</span>
@@ -966,6 +1465,8 @@ function WeekView({ t, state, setState, setTab }) {
 /* ─────────────────── HISTORY ─────────────────── */
 
 function HistoryView({ t, state }) {
+  const units = state.prefs.units
+  const program = state.program
   const entries = useMemo(() => {
     return Object.entries(state.sessions)
       .filter(([k]) => !k.startsWith('__'))
@@ -991,7 +1492,7 @@ function HistoryView({ t, state }) {
         const exDone = Object.entries(sess.logs || {}).filter(([, v]) => v.done)
         if (!exDone.length) return null
         const isOpen = open.has(k)
-        const accent = accentForDay(sess.day)
+        const accent = accentForDay(program, sess.day)
         return (
           <div key={k} style={{
             background: t.card, border: `1px solid ${t.border}`,
@@ -1022,9 +1523,9 @@ function HistoryView({ t, state }) {
                     fontSize: 13
                   }}>
                     <span>{name}</span>
-                    {v.weight != null
-                      ? <span style={{ fontWeight: 700, color: t.text }}>
-                          {v.weight}{v.units || ''}
+                    {v.weightKg != null
+                      ? <span style={{ fontWeight: 700, color: t.text, fontFamily: 'Unbounded' }}>
+                          {formatWeight(v.weightKg, units)}
                         </span>
                       : <span style={{ color: t.sub, fontSize: 11 }}>✓ done</span>}
                   </div>
@@ -1047,18 +1548,19 @@ function prettyDate(k) {
 /* ─────────────────── PRs ─────────────────── */
 
 function PRsView({ t, state }) {
+  const units = state.prefs.units
   const records = useMemo(() => {
     const map = new Map()
     for (const [k, sess] of Object.entries(state.sessions)) {
       if (k.startsWith('__')) continue
       for (const [name, v] of Object.entries(sess.logs || {})) {
-        if (v.weight == null) continue
-        const w = Number(v.weight); if (!Number.isFinite(w)) continue
+        if (v.weightKg == null) continue
+        const kg = Number(v.weightKg); if (!Number.isFinite(kg)) continue
         const cur = map.get(name)
-        if (!cur || w > cur.weight) map.set(name, { name, weight: w, units: v.units || '', date: k })
+        if (!cur || kg > cur.kg) map.set(name, { name, kg, date: k })
       }
     }
-    return [...map.values()].sort((a, b) => b.weight - a.weight)
+    return [...map.values()].sort((a, b) => b.kg - a.kg)
   }, [state.sessions])
 
   if (!records.length) {
@@ -1092,9 +1594,7 @@ function PRsView({ t, state }) {
             <div className="heading" style={{
               fontSize: 18, fontWeight: 800, color: t.text
             }}>
-              {r.weight}<span style={{
-                fontSize: 11, color: t.sub, marginLeft: 4
-              }}>{r.units}</span>
+              {formatWeight(r.kg, units)}
             </div>
           </div>
         )
