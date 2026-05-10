@@ -1,10 +1,10 @@
 // One-shot state migrator. Idempotent — safe to run on every load.
 // Each migration runs only when state.prefs.schemaVersion is below its target.
 
-import { DEFAULT_PROGRAM, LEGACY_SHIELD } from './data.js'
+import { DEFAULT_PROGRAM, LEGACY_SHIELD, PROGRAM_PRESETS } from './data.js'
 import { toKg } from './units.js'
 
-const CURRENT = 2
+const CURRENT = 3
 
 export function migrate(state) {
   const prefs = { ...(state?.prefs || {}) }
@@ -44,6 +44,20 @@ export function migrate(state) {
     }
     next.sessions = sessions
     next.prefs.schemaVersion = 2
+  }
+
+  // v2 → v3: single state.program → state.programs.{hybrid, original} +
+  // prefs.activeProgramId. Always seed both presets so the user can switch
+  // freely; the previous single program (whatever it was) becomes 'hybrid'.
+  if ((next.prefs.schemaVersion || 0) < 3) {
+    const programs = { ...(next.programs || {}) }
+    if (next.program && !programs.hybrid) programs.hybrid = next.program
+    if (!programs.hybrid) programs.hybrid = PROGRAM_PRESETS.hybrid()
+    if (!programs.original) programs.original = PROGRAM_PRESETS.original()
+    next.programs = programs
+    delete next.program
+    if (!next.prefs.activeProgramId) next.prefs.activeProgramId = 'hybrid'
+    next.prefs.schemaVersion = 3
   }
 
   return next

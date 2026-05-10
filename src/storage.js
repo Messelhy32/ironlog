@@ -56,7 +56,8 @@ const merge = (parsed) => migrate({
   ...parsed,
   prefs: { ...empty().prefs, ...(parsed?.prefs || {}) },
   sessions: { ...(parsed?.sessions || {}) },
-  program: parsed?.program,
+  program: parsed?.program,        // for v2→v3 migration only
+  programs: parsed?.programs,
   shield: parsed?.shield
 })
 

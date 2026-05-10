@@ -9,6 +9,8 @@ const g = (name, items) => ({ id: `g_${++_id}`, name, items })
 // runnable schedule anymore — that's DEFAULT_PROGRAM (Hybrid Athletic).
 
 export const LEGACY_PROGRAM = {
+  id: 'original',
+  name: 'Original',
   days: [
     {
       id: 'D1', label: 'D1', title: 'LOWER — Strength + Knee + APT',
@@ -183,9 +185,11 @@ export const LEGACY_PROGRAM = {
 // Day IDs are weekday-keyed so the TODAY view auto-selects by current weekday.
 
 export const DEFAULT_PROGRAM = {
+  id: 'hybrid',
+  name: 'Hybrid Athletic',
   days: [
     {
-      id: 'mon', label: 'MON', title: 'Athletic Lower + Agility',
+      id: 'h1', label: 'D1', title: 'Athletic Lower + Agility',
       emoji: '🦵', accent: '#dc2626',
       groups: [
         g('Warm-Up', [
@@ -227,7 +231,7 @@ export const DEFAULT_PROGRAM = {
       ]
     },
     {
-      id: 'tue', label: 'TUE', title: 'Athletic Upper + Shoulder',
+      id: 'h2', label: 'D2', title: 'Athletic Upper + Shoulder',
       emoji: '💪', accent: '#2563eb',
       groups: [
         g('Shoulder Prep', [
@@ -261,7 +265,7 @@ export const DEFAULT_PROGRAM = {
       ]
     },
     {
-      id: 'wed', label: 'WED', title: 'Recovery + Zone 2 + Mobility',
+      id: 'h3', label: 'D3', title: 'Recovery + Zone 2 + Mobility',
       emoji: '🌿', accent: '#16a34a',
       groups: [
         g('Cardio (35–45 min, moderate HR)', [
@@ -286,7 +290,7 @@ export const DEFAULT_PROGRAM = {
       ]
     },
     {
-      id: 'thu', label: 'THU', title: 'Explosive Full Body + Speed',
+      id: 'h4', label: 'D4', title: 'Explosive Full Body + Speed',
       emoji: '⚡', accent: '#dc2626',
       groups: [
         g('Agility / Footwork', [
@@ -315,7 +319,7 @@ export const DEFAULT_PROGRAM = {
       ]
     },
     {
-      id: 'fri', label: 'FRI', title: 'Hybrid Conditioning (Hyrox Style)',
+      id: 'h5', label: 'D5', title: 'Hybrid Conditioning (Hyrox Style)',
       emoji: '🔥', accent: '#d97706',
       groups: [
         g('Main Circuit (5 rounds, 2–3 min rest)', [
@@ -329,7 +333,7 @@ export const DEFAULT_PROGRAM = {
       ]
     },
     {
-      id: 'sat', label: 'SAT', title: 'Agility + Sprint + Mobility',
+      id: 'h6', label: 'D6', title: 'Agility + Sprint + Mobility',
       emoji: '🏃', accent: '#2563eb',
       groups: [
         g('Warm-up', [
@@ -359,7 +363,7 @@ export const DEFAULT_PROGRAM = {
       ]
     },
     {
-      id: 'sun', label: 'SUN', title: 'Full Rest',
+      id: 'h7', label: 'D7', title: 'Full Rest',
       emoji: '💤', accent: '#7c3aed',
       groups: [ g('Rest', [ e('Light Walking', '20–30 min easy') ]) ]
     }
@@ -432,6 +436,17 @@ export const LIBRARY = dedupe([
 export const WEIGHTED = new Set(LIBRARY.filter(x => x.weighted).map(x => x.name))
 
 export const isWeighted = (name) => WEIGHTED.has(name)
+
+/** Map of presetId → fresh program clone factory. Used for seeding + reset. */
+export const PROGRAM_PRESETS = {
+  hybrid: () => JSON.parse(JSON.stringify(DEFAULT_PROGRAM)),
+  original: () => JSON.parse(JSON.stringify(LEGACY_PROGRAM))
+}
+
+export const PROGRAM_LIST = [
+  { id: 'hybrid', name: 'Hybrid Athletic' },
+  { id: 'original', name: 'Original' }
+]
 
 /* ─────────────────────────── QUOTES + DATES ─────────────────────────── */
 

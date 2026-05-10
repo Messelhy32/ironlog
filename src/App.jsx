@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  isWeighted, LIBRARY, quoteOfWeek,
+  isWeighted, LIBRARY, PROGRAM_LIST, quoteOfWeek,
   mondayIndex, mondayOfWeek, dateKey, prettyDayDate, WEEKDAY_LABELS
 } from './data.js'
 import {
@@ -15,7 +15,7 @@ import {
 } from './units.js'
 import {
   addExercise, removeExercise, addGroup, removeGroup, renameGroup,
-  resetDay, resetProgram
+  resetDay, presetProgram
 } from './program.js'
 import {
   supportsBiometric, platformAuthenticatorAvailable,
@@ -33,14 +33,19 @@ const THEMES = {
   }
 }
 
-const accentForDay = (program, id) =>
-  program?.days?.find(d => d.id === id)?.accent || '#dc2626'
-
-// Index in program.days that matches the current weekday (Mon=0..Sun=6).
-const weekdayDayIndex = (program, date = new Date()) => {
-  const i = mondayIndex(date)
-  return Math.min(i, (program?.days?.length || 1) - 1)
+// Search every program in state.programs for a day with this id.
+const findDay = (state, id) => {
+  if (!id) return null
+  for (const prog of Object.values(state?.programs || {})) {
+    const d = prog?.days?.find(d => d.id === id)
+    if (d) return d
+  }
+  return null
 }
+const accentForDay = (state, id) => findDay(state, id)?.accent || '#dc2626'
+
+const activeProgram = (state) =>
+  state?.programs?.[state?.prefs?.activeProgramId] || state?.programs?.hybrid
 
 export default function App() {
   const [state, setStateRaw] = useState(loadCache)
@@ -622,12 +627,11 @@ function Tabs({ t, tab, setTab }) {
 
 function TodayView({ t, state, setState, onPRToast }) {
   const today = new Date()
-  const program = state.program
+  const program = activeProgram(state)
   const days = program?.days || []
-  const todayDayId = days[weekdayDayIndex(program, today)]?.id
   const defaultDay = state.prefs.selectedDay && days.find(d => d.id === state.prefs.selectedDay)
     ? state.prefs.selectedDay
-    : todayDayId
+    : days[0]?.id
   const [activeDay, setActiveDay] = useState(defaultDay)
   const [sheet, setSheet] = useState(null) // { exercise }
   const [editing, setEditing] = useState(false)
@@ -639,6 +643,12 @@ function TodayView({ t, state, setState, onPRToast }) {
       setState(s => ({ ...s, prefs: { ...s.prefs, selectedDay: activeDay } }))
     }
   }, [activeDay])
+
+  // When the user switches programs, fall back to the first day of the new
+  // program if the previously-active day no longer exists.
+  useEffect(() => {
+    if (!days.find(d => d.id === activeDay) && days[0]) setActiveDay(days[0].id)
+  }, [state.prefs.activeProgramId])
 
   const day = days.find(d => d.id === activeDay) || days[0]
   const groups = day?.groups || []
@@ -693,10 +703,28 @@ function TodayView({ t, state, setState, onPRToast }) {
   }
 
   // Editor handlers ─────────────────────────────────────────
-  const editProgram = (mutator) => setState(s => ({ ...s, program: mutator(s.program) }))
+  const editProgram = (mutator) => setState(s => {
+    const id = s.prefs.activeProgramId
+    const prog = s.programs?.[id]
+    if (!prog) return s
+    return {
+      ...s,
+      programs: { ...s.programs, [id]: mutator(prog) }
+    }
+  })
+
+  const switchProgram = (id) => {
+    if (state.prefs.activeProgramId === id) return
+    setState(s => ({ ...s, prefs: { ...s.prefs, activeProgramId: id, selectedDay: null } }))
+  }
 
   return (
     <div className="fade">
+      {/* Program switcher */}
+      <ProgramSwitcher t={t}
+        activeId={state.prefs.activeProgramId || 'hybrid'}
+        onSwitch={switchProgram} />
+
       {/* Day picker */}
       <div style={{
         display: 'grid', gridTemplateColumns: `repeat(${days.length}, 1fr)`, gap: 6,
@@ -874,12 +902,49 @@ function TodayView({ t, state, setState, onPRToast }) {
             setResetMenu(false)
           }}
           onResetAll={() => {
-            if (confirm('Reset entire plan to Hybrid Athletic default?'))
-              setState(s => ({ ...s, program: resetProgram() }))
+            const id = state.prefs.activeProgramId || 'hybrid'
+            const presetName = id === 'original' ? 'Original' : 'Hybrid Athletic'
+            if (confirm(`Reset the ${presetName} plan to default?`))
+              setState(s => ({
+                ...s,
+                programs: { ...s.programs, [id]: presetProgram(id) }
+              }))
             setResetMenu(false)
           }}
         />
       )}
+    </div>
+  )
+}
+
+function ProgramSwitcher({ t, activeId, onSwitch }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 8,
+      marginBottom: 10
+    }}>
+      <span className="heading" style={{
+        fontSize: 10, letterSpacing: '0.18em', color: t.sub
+      }}>PROGRAM</span>
+      <div style={{
+        flex: 1,
+        display: 'inline-flex', borderRadius: 999,
+        background: t.card, border: `1px solid ${t.border}`,
+        padding: 3
+      }}>
+        {PROGRAM_LIST.map(p => {
+          const active = p.id === activeId
+          return (
+            <button key={p.id} onClick={() => onSwitch(p.id)} className="heading" style={{
+              flex: 1, padding: '7px 10px',
+              fontSize: 11, fontWeight: 700, letterSpacing: '0.08em',
+              borderRadius: 999,
+              background: active ? t.accent : 'transparent',
+              color: active ? '#fff' : t.sub
+            }}>{p.name.toUpperCase()}</button>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -1370,11 +1435,17 @@ function WeekView({ t, state, setState, setTab }) {
   const today = new Date()
   const monday = mondayOfWeek(today)
   const todayIdx = mondayIndex(today)
-  const programDays = state.program?.days || []
+  const program = activeProgram(state)
+  const programDays = program?.days || []
 
+  // Each weekday cell shows what was actually done that date (if anything),
+  // looked up across ALL programs so old D1 history still colors correctly.
   const days = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(monday); d.setDate(monday.getDate() + i)
-    return { date: d, key: dateKey(d), idx: i, dayDef: programDays[i] || programDays[0] }
+    const key = dateKey(d)
+    const sess = state.sessions[key]
+    const dayDef = sess ? findDay(state, sess.day) : null
+    return { date: d, key, idx: i, sess, dayDef }
   })
 
   const goToDay = (dayId) => {
@@ -1393,41 +1464,42 @@ function WeekView({ t, state, setState, setTab }) {
         marginBottom: 18
       }}>
         {days.map(d => {
-          const dayDef = d.dayDef
-          if (!dayDef) return null
-          const sess = state.sessions[d.key]
-          const matchesPlan = sess && sess.day === dayDef.id
-          const total = (dayDef.groups || []).reduce((a, g) => a + g.items.length, 0)
-          const done = matchesPlan ? Object.values(sess.logs || {}).filter(l => l.done).length : 0
           const isToday = d.idx === todayIdx
+          const dayDef = d.dayDef
+          const total = dayDef ? (dayDef.groups || []).reduce((a, g) => a + g.items.length, 0) : 0
+          const done = d.sess ? Object.values(d.sess.logs || {}).filter(l => l.done).length : 0
+          const accent = dayDef?.accent || t.border
           const complete = total > 0 && done >= total
-
+          const onClick = () => {
+            if (dayDef) goToDay(dayDef.id)
+            else setTab('today')
+          }
           return (
-            <button key={d.key} onClick={() => goToDay(dayDef.id)}
+            <button key={d.key} onClick={onClick}
               className={complete && isToday ? 'pulse-today' : ''}
               style={{
                 background: t.card,
-                border: `1px solid ${complete ? dayDef.accent : t.border}`,
+                border: `1px solid ${complete ? accent : t.border}`,
                 borderRadius: 12, padding: '12px 4px',
                 position: 'relative',
-                boxShadow: complete ? `inset 0 0 0 2px ${dayDef.accent}33` : 'none'
+                boxShadow: complete ? `inset 0 0 0 2px ${accent}33` : 'none'
               }}>
               {isToday && (
                 <span style={{
                   position: 'absolute', top: 6, right: 6,
                   width: 6, height: 6, borderRadius: 999,
-                  background: dayDef.accent
+                  background: dayDef?.accent || t.sub
                 }} />
               )}
-              <div style={{ fontSize: 18 }}>{dayDef.emoji}</div>
+              <div style={{ fontSize: 18 }}>{dayDef?.emoji || '·'}</div>
               <div className="heading" style={{
                 fontSize: 10, letterSpacing: '0.1em', marginTop: 4, color: t.sub
               }}>{WEEKDAY_LABELS[d.idx]}</div>
               <div className="heading" style={{
                 fontSize: 12, fontWeight: 700, color: t.text, marginTop: 2
-              }}>{dayDef.label}</div>
+              }}>{dayDef?.label || '—'}</div>
               <div style={{ fontSize: 10, color: t.sub, marginTop: 4 }}>
-                {total ? `${done}/${total}` : '—'}
+                {d.sess ? (total ? `${done}/${total}` : `${done}`) : '—'}
               </div>
             </button>
           )
@@ -1466,7 +1538,6 @@ function WeekView({ t, state, setState, setTab }) {
 
 function HistoryView({ t, state }) {
   const units = state.prefs.units
-  const program = state.program
   const entries = useMemo(() => {
     return Object.entries(state.sessions)
       .filter(([k]) => !k.startsWith('__'))
@@ -1492,7 +1563,8 @@ function HistoryView({ t, state }) {
         const exDone = Object.entries(sess.logs || {}).filter(([, v]) => v.done)
         if (!exDone.length) return null
         const isOpen = open.has(k)
-        const accent = accentForDay(program, sess.day)
+        const accent = accentForDay(state, sess.day)
+        const dayDef = findDay(state, sess.day)
         return (
           <div key={k} style={{
             background: t.card, border: `1px solid ${t.border}`,
@@ -1505,7 +1577,7 @@ function HistoryView({ t, state }) {
             }}>
               <div style={{ flex: 1 }}>
                 <div className="heading" style={{ fontSize: 13, fontWeight: 700 }}>
-                  {sess.day} · {prettyDate(k)}
+                  {dayDef?.label || sess.day} · {prettyDate(k)}
                 </div>
                 <div style={{ fontSize: 11, color: t.sub, marginTop: 3 }}>
                   {exDone.length} exercise{exDone.length !== 1 ? 's' : ''} logged

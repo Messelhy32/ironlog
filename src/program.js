@@ -2,7 +2,7 @@
 // Stable IDs are used so renaming an item or group doesn't orphan logs (logs key
 // off exercise *name* — IDs are just for keying React lists and editor handles).
 
-import { DEFAULT_PROGRAM, LEGACY_SHIELD } from './data.js'
+import { DEFAULT_PROGRAM, LEGACY_SHIELD, PROGRAM_PRESETS } from './data.js'
 
 let counter = 0
 export const newId = (prefix) =>
@@ -84,12 +84,22 @@ export const renameGroup = (program, dayId, groupId, name) =>
     replaceGroup(day, groupId, g => ({ ...g, name: name || g.name }))
   )
 
+/** Reset just one day to its preset version. Looks up the preset by program.id. */
 export const resetDay = (program, dayId) => {
-  const fresh = DEFAULT_PROGRAM.days.find(d => d.id === dayId)
+  const presetFn = PROGRAM_PRESETS[program?.id]
+  const preset = presetFn ? presetFn() : DEFAULT_PROGRAM
+  const fresh = preset.days.find(d => d.id === dayId)
   if (!fresh) return program
   return replaceDay(program, dayId, () => clone(fresh))
 }
 
+/** Fresh copy of a preset by id. */
+export const presetProgram = (id) => {
+  const fn = PROGRAM_PRESETS[id]
+  return fn ? fn() : clone(DEFAULT_PROGRAM)
+}
+
+/** Legacy default reset (Hybrid). */
 export const resetProgram = () => clone(DEFAULT_PROGRAM)
 export const resetShield = () => clone(LEGACY_SHIELD)
 
