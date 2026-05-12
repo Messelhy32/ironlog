@@ -6,6 +6,4 @@ const UserSchema = new mongoose.Schema({
   displayName: { type: String }
 }, { timestamps: true, collection: 'users' })
 
-UserSchema.index({ username: 1 }, { unique: true })
-
 export const User = mongoose.model('User', UserSchema)
