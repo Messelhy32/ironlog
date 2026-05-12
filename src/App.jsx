@@ -12,6 +12,12 @@ import {
 } from './store.js'
 import { connectRealtime, disconnectRealtime } from './realtime.js'
 import LoginScreen from './LoginScreen.jsx'
+import { LockScreen, PinSetup, BioSetup } from './Lock.jsx'
+import {
+  getPin, setPin, clearPin, hasPin,
+  isUnlocked, markUnlocked, lockSession
+} from './lock.js'
+import { supportsBiometric, hasBiometric, clearBiometric } from './biometric.js'
 
 const THEMES = {
   dark: {
@@ -93,9 +99,18 @@ const buildLibrary = (programs) => {
 
 /* ────────────────────────────── App ────────────────────────────── */
 
+// Decides what to show at boot: login if no token, lock if PIN is set and we
+// haven't unlocked this session, otherwise straight in.
+const initialAuthState = () => {
+  if (!getToken()) return 'login'
+  if (hasPin() && !isUnlocked()) return 'lock'
+  if (!hasPin()) return 'setup-pin'   // logged in but never set a PIN yet
+  return 'app'
+}
+
 export default function App() {
   const store = useStore()
-  const [authed, setAuthed] = useState(() => !!getToken())
+  const [authState, setAuthState] = useState(initialAuthState)
   const [hydrated, setHydrated] = useState(false)
   const [hydrateErr, setHydrateErr] = useState('')
   const [tab, setTab] = useState('today')
@@ -103,39 +118,47 @@ export default function App() {
   const [online, setOnline] = useState(navigator.onLine)
   const toastTimer = useRef(0)
 
+  const authed = authState !== 'login'
+
   const flashToast = (msg, ms = 2500) => {
     setToast(msg)
     clearTimeout(toastTimer.current)
     toastTimer.current = setTimeout(() => setToast(null), ms)
   }
 
-  useEffect(() => {
-    setUnauthorizedHandler(() => {
-      setAuthed(false); setHydrated(false); disconnectRealtime()
-    })
-  }, [])
+  // Token rejected by server → wipe everything local, drop to login.
+  const handleSignedOut = () => {
+    setToken(''); clearPin(); clearBiometric(); lockSession()
+    setHydrated(false); disconnectRealtime()
+    setAuthState('login')
+  }
 
   useEffect(() => {
-    if (!authed) return
+    setUnauthorizedHandler(() => handleSignedOut())
+  }, [])
+
+  // Only hydrate once we've reached the 'app' state.
+  useEffect(() => {
+    if (authState !== 'app') return
     let cancelled = false
     setHydrated(false); setHydrateErr('')
     actions.hydrate(today())
       .then(() => { if (!cancelled) setHydrated(true) })
       .catch(e => {
         if (cancelled) return
-        if (e?.status === 401) { setAuthed(false); setToken(''); return }
+        if (e?.status === 401) { handleSignedOut(); return }
         setHydrateErr(e?.message || 'Could not reach server')
       })
     connectRealtime()
     return () => { cancelled = true; disconnectRealtime() }
-  }, [authed])
+  }, [authState])
 
   useEffect(() => {
     const u = () => setOnline(navigator.onLine)
     window.addEventListener('online', u)
     window.addEventListener('offline', u)
     const onVis = () => {
-      if (document.visibilityState === 'visible' && authed && hydrated) {
+      if (document.visibilityState === 'visible' && authState === 'app' && hydrated) {
         actions.refreshSessions(today()).catch(() => {})
       }
     }
@@ -145,7 +168,7 @@ export default function App() {
       window.removeEventListener('offline', u)
       document.removeEventListener('visibilitychange', onVis)
     }
-  }, [authed, hydrated])
+  }, [authState, hydrated])
 
   const theme = store.profile?.theme || 'dark'
   const t = THEMES[theme]
@@ -157,8 +180,33 @@ export default function App() {
     if (meta) meta.setAttribute('content', t.pageBg)
   }, [t])
 
-  if (!authed) {
-    return <LoginScreen t={t} onLoggedIn={() => setAuthed(true)} />
+  if (authState === 'login') {
+    return <LoginScreen t={t} onLoggedIn={() => {
+      // After login, go through PIN setup once.
+      setAuthState(hasPin() ? 'app' : 'setup-pin')
+      markUnlocked()
+    }} />
+  }
+
+  if (authState === 'setup-pin') {
+    return <PinSetup t={t}
+      onSet={(pin) => {
+        setPin(pin)
+        setAuthState(supportsBiometric() && !hasBiometric() ? 'setup-bio' : 'app')
+      }}
+      onSkip={() => setAuthState('app')} />
+  }
+
+  if (authState === 'setup-bio') {
+    return <BioSetup t={t} onDone={() => setAuthState('app')} />
+  }
+
+  if (authState === 'lock') {
+    return <LockScreen t={t}
+      expectedPin={getPin()}
+      onUnlocked={() => { markUnlocked(); setAuthState('app') }}
+      onSignOut={handleSignedOut}
+    />
   }
 
   if (!hydrated) {
@@ -170,7 +218,7 @@ export default function App() {
             .then(() => setHydrated(true))
             .catch(e => setHydrateErr(e?.message || 'Still no luck'))
         }}
-        onSignOut={() => { setToken(''); setAuthed(false) }} />
+        onSignOut={handleSignedOut} />
     )
   }
 
@@ -185,10 +233,10 @@ export default function App() {
           streak={computeStreak(store)}
           onToggleTheme={() => actions.setProfile({ theme: theme === 'dark' ? 'light' : 'dark' })}
           onToggleUnits={() => actions.setProfile({ units: store.profile.units === 'kg' ? 'lb' : 'kg' })}
+          onLock={hasPin() ? () => { lockSession(); setAuthState('lock') } : null}
           onSignOut={async () => {
             try { await api.auth.logout() } catch {}
-            setToken('')
-            setAuthed(false)
+            handleSignedOut()
           }}
           tab={tab} setTab={setTab}
         />
@@ -263,7 +311,7 @@ function LoadingScreen({ t, error, onRetry, onSignOut }) {
   )
 }
 
-function Header({ t, store, streak, onToggleTheme, onToggleUnits, onSignOut, tab, setTab }) {
+function Header({ t, store, streak, onToggleTheme, onToggleUnits, onLock, onSignOut, tab, setTab }) {
   return (
     <header style={{
       position: 'sticky', top: 0, zIndex: 30,
@@ -287,6 +335,7 @@ function Header({ t, store, streak, onToggleTheme, onToggleUnits, onSignOut, tab
           )}
         </h1>
         <div style={{ display: 'flex', gap: 6 }}>
+          {onLock && <IconBtn t={t} title="Lock now" onClick={onLock}>🔒</IconBtn>}
           <IconBtn t={t} title="Sign out" onClick={onSignOut}>⎋</IconBtn>
           <IconBtn t={t} title="Units" onClick={onToggleUnits}>
             <span style={{ fontFamily: 'Unbounded', fontSize: 11, fontWeight: 700 }}>
