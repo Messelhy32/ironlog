@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: ironlog-api
+    runtime: node
+    region: oregon
+    plan: free
+    rootDir: server
+    buildCommand: npm install
+    startCommand: node src/index.js
+    autoDeploy: true
+    envVars:
+      - key: MONGODB_URI
+        sync: false
+      - key: CORS_ORIGINS
+        value: "https://ironlog-app.pages.dev,http://localhost:5173"
+      - key: TOKEN_TTL_DAYS
+        value: "30"
+      - key: SEED_ON_START
+        value: "true"
+      - key: SEED_USERNAME
+        value: "me"
+      - key: SEED_PASSWORD
+        sync: false

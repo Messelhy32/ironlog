@@ -2,12 +2,5 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "ironlog-app",
   "compatibility_date": "2024-12-01",
-  "pages_build_output_dir": "./dist",
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "ironlog-db",
-      "database_id": "1451db88-40a3-4ac0-9637-9111f50d1d75"
-    }
-  ]
+  "pages_build_output_dir": "./dist"
 }
