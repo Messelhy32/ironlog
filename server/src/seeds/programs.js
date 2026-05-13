@@ -12,76 +12,61 @@ export const PRESETS = [
     position: 0,
     days: [
       {
-        label: 'D1', title: 'Athletic Lower + Agility', emoji: '🦵', accent: '#dc2626',
+        label: 'D1', title: 'Lower — Strength (75–90 min)', emoji: '🦵', accent: '#dc2626',
         groups: [
-          g('Warm-Up', [
+          g('Mobility + Activation (10–12 min)', [
             e('Couch Stretch', '2×45s'),
-            e('Thoracic Rotations', '2×10'),
-            e('Ankle Rocks', '2×10')
-          ]),
-          g('Activation', [
-            e('Spanish Squat', '2×30s'),
+            e('90/90', '2×8 each'),
+            e('Ankle Rocks', '2×10'),
             e('Glute Bridges', '2×15'),
             e('Dead Bug', '2×10')
           ]),
-          g('Agility Ladder', [
-            e('One Foot Each Box', '×2'),
-            e('In-In-Out-Out', '×2'),
-            e('Lateral Quick Steps', '×2'),
-            e('Icky Shuffle', '×2')
-          ]),
-          g('Plyometrics', [
+          g('Power (pick one)', [
             e('Box Jump', '4×3'),
-            e('Broad Jump', '3×3')
+            e('Broad Jump', '4×3')
           ]),
-          g('Strength', [
+          g('Main Strength', [
             e('Trap Bar Deadlift', '5×5', true),
             e('Front Squat', '4×5', true),
-            e('Romanian Deadlift', '3×6', true),
+            e('Romanian Deadlift', '3×6', true)
+          ]),
+          g('Unilateral (pick one)', [
+            e('Bulgarian Split Squat', '3×8 each', true),
             e('Walking Lunges', '3×10 each', true)
           ]),
-          g('Athletic Finisher (3 rounds)', [
-            e('Sled Push', '20m', true),
-            e('Kettlebell Swings', '×15', true),
-            e('Farmer Carry', '20m', true)
+          g('Hamstring', [
+            e('Nordic Curl', '3×5', true)
           ]),
-          g('Core + APT', [
-            e('Decline Reverse Crunch', '3×12', true),
-            e('Pallof Press', '3×10', true),
-            e('Copenhagen Plank', '3×30s')
+          g('Core (pick one)', [
+            e('Reverse Crunch', '3×12', true),
+            e('Pallof Press', '3×10', true)
           ])
         ]
       },
       {
-        label: 'D2', title: 'Athletic Upper + Shoulder', emoji: '💪', accent: '#2563eb',
+        label: 'D2', title: 'Upper — Strength (75–90 min)', emoji: '💪', accent: '#2563eb',
         groups: [
-          g('Shoulder Prep', [
+          g('Prep (10 min)', [
             e('Band External Rotation', '3×15'),
             e('Face Pull', '3×12'),
             e('Scap Wall Slides', '2×12'),
             e('Chin Tucks', '2×10')
           ]),
           g('Power', [
-            e('Med Ball Slams', '4×5', true),
-            e('Rotational Throws', '4×4 each', true)
+            e('Med Ball Rotational Throw', '4×4 each')
           ]),
-          g('Main Strength', [
+          g('Main Lifts', [
             e('Bench Press', '5×5', true),
             e('Pull-Ups', '4×6', true),
-            e('Incline DB Press', '3×8', true),
             e('Chest Supported Row', '3×8', true),
             e('Landmine Press', '3×8', true)
           ]),
-          g('Functional Block (3 rounds)', [
-            e('Battle Ropes', '30s'),
-            e('Push-Ups', '×15'),
-            e('Sled Pull', '20m', true)
-          ]),
-          g('Arms + Wrist', [
-            e('Wrist Curls', '3×15', true),
-            e('Reverse Wrist Curls', '3×15', true),
+          g('Arm / Wrist Superset', [
             e('Hammer Curl', '3×12', true),
-            e('Rope Pushdown', '3×12', true)
+            e('Wrist Curls', '3×15', true)
+          ]),
+          g('Core', [
+            e('Hanging Knee Raises', '3×10', true)
           ])
         ]
       },
@@ -110,66 +95,41 @@ export const PRESETS = [
         ]
       },
       {
-        label: 'D4', title: 'Explosive Full Body + Speed', emoji: '⚡', accent: '#dc2626',
-        groups: [
-          g('Agility / Footwork', [
-            e('Ladder Lateral Run', '×2'),
-            e('Single Leg Hop Pattern', '×2'),
-            e('Quick Feet Forward/Back', '×2')
-          ]),
-          g('Olympic Lift', [
-            e('Power Clean', '5×3 light + explosive', true)
-          ]),
-          g('Explosive Block', [
-            e('Trap Bar Jumps', '4×3', true),
-            e('Box Jump', '3×3'),
-            e('Lateral Bounds', '3×5')
-          ]),
-          g('Speed (full rest)', [
-            e('20m Sprint', '6×1'),
-            e('30m Sprint', '3×1')
-          ]),
-          g('Athletic Circuit (4 rounds, 90s rest)', [
-            e('Kettlebell Swings', '×15', true),
-            e('Burpees', '×10'),
-            e('Row / Ski Erg', '250m'),
-            e('Farmer Carry', '20m', true)
-          ])
-        ]
-      },
-      {
-        label: 'D5', title: 'Hybrid Conditioning (Hyrox Style)', emoji: '🔥', accent: '#d97706',
-        groups: [
-          g('Main Circuit (5 rounds, 2–3 min rest)', [
-            e('Row', '500m'),
-            e('Walking Lunges', '×20', true),
-            e('Burpees', '×15'),
-            e('Wall Balls', '×20', true),
-            e('Sled Push', '20m', true),
-            e('Farmer Carry', '20m', true)
-          ])
-        ]
-      },
-      {
-        label: 'D6', title: 'Agility + Sprint + Mobility', emoji: '🏃', accent: '#2563eb',
+        label: 'D4', title: 'Speed + Sprints (45–60 min)', emoji: '⚡', accent: '#dc2626',
         groups: [
           g('Warm-up', [
-            e('Glute Bridges', '×15'),
-            e('Dead Bug', '×10')
+            e('Glute Bridges', '2×15'),
+            e('A-Skips', '2×20m')
           ]),
-          g('Agility', [
-            e('Cone Shuffle Drill', '×4'),
-            e('5-10-5 Drill', '×4'),
-            e('Shuffle → Sprint', '×4'),
-            e('Backpedal → Sprint', '×4')
+          g('Plyo', [
+            e('Box Jump', '3×3'),
+            e('Lateral Bounds', '3×4')
           ]),
-          g('Sprint', [
+          g('Sprints (full rest)', [
             e('20m Sprint', '6×1'),
             e('40m Sprint', '3×1')
           ]),
           g('Carries', [
-            e('Farmer Carry', '20m', true),
-            e('Offset Carry', '20m', true)
+            e('Farmer Carry', '20m', true)
+          ])
+        ]
+      },
+      {
+        label: 'D5', title: 'Conditioning (45–60 min)', emoji: '🔥', accent: '#d97706',
+        groups: [
+          g('Main Circuit (4 rounds, 2 min rest)', [
+            e('Row', '500m'),
+            e('Kettlebell Swings', '×15', true),
+            e('Burpees', '×10'),
+            e('Farmer Carry', '20m', true)
+          ])
+        ]
+      },
+      {
+        label: 'D6', title: 'Active Recovery + Mobility', emoji: '🌿', accent: '#16a34a',
+        groups: [
+          g('Light Movement', [
+            e('Easy Walk / Bike', '20–30 min')
           ]),
           g('Mobility + Posture', [
             e('Couch Stretch', '2×45s'),

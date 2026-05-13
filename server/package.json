@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "seed": "node src/seed.js"
+    "seed": "node src/seed.js",
+    "migrate:hybrid": "node src/migrate-hybrid.js"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
