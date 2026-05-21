@@ -326,7 +326,7 @@ export const PRESETS = [
     position: 2,
     days: [
       {
-        label: 'MON', title: 'Upper Push + Pull — Strength', emoji: '💪', accent: '#2563eb',
+        label: 'Day 1', title: 'Upper Push + Pull — Strength', emoji: '💪', accent: '#2563eb',
         groups: [
           warmup(),
           g('Strength (detail = Phase1 · Phase2)', [
@@ -340,7 +340,7 @@ export const PRESETS = [
         ]
       },
       {
-        label: 'TUE', title: 'Lower Strength — Knee-Friendly', emoji: '🦵', accent: '#dc2626',
+        label: 'Day 2', title: 'Lower Strength — Knee-Friendly', emoji: '🦵', accent: '#dc2626',
         groups: [
           warmup(),
           g('Strength (detail = Phase1 · Phase2)', [
@@ -354,7 +354,7 @@ export const PRESETS = [
         ]
       },
       {
-        label: 'WED', title: 'Upper Hypertrophy + Throwing Power', emoji: '🤾', accent: '#2563eb',
+        label: 'Day 3', title: 'Upper Hypertrophy + Throwing Power', emoji: '🤾', accent: '#2563eb',
         groups: [
           warmup(),
           g('Power', [
@@ -372,7 +372,7 @@ export const PRESETS = [
         ]
       },
       {
-        label: 'THU', title: 'Lower Power + Sprint', emoji: '⚡', accent: '#dc2626',
+        label: 'Day 4', title: 'Lower Power + Sprint', emoji: '⚡', accent: '#dc2626',
         groups: [
           warmup(),
           g('Plyo (detail = Phase1 · Phase2)', [
@@ -393,7 +393,7 @@ export const PRESETS = [
         ]
       },
       {
-        label: 'FRI', title: 'Upper Press Volume + Carries + Core', emoji: '🏋️', accent: '#2563eb',
+        label: 'Day 5', title: 'Upper Press Volume + Carries + Core', emoji: '🏋️', accent: '#2563eb',
         groups: [
           warmup(),
           g('Press + Pull (detail = Phase1 · Phase2)', [
@@ -410,7 +410,7 @@ export const PRESETS = [
         ]
       },
       {
-        label: 'SAT', title: 'Conditioning + Reactive Agility (RSA)', emoji: '🔥', accent: '#d97706',
+        label: 'Day 6', title: 'Conditioning + Reactive Agility (RSA)', emoji: '🔥', accent: '#d97706',
         groups: [
           g('Block A — Reactive Agility (15 min)', [
             e('5-10-5 Shuttle', '4 reps'),
@@ -432,44 +432,13 @@ export const PRESETS = [
         ]
       },
       {
-        label: 'SUN', title: 'Full Rest or Z2 + Mobility', emoji: '💤', accent: '#16a34a',
+        label: 'Day 7', title: 'Full Rest or Z2 + Mobility', emoji: '💤', accent: '#16a34a',
         groups: [
           g('Optional (if feeling good)', [
             e('Easy Bike or Incline Walk', '30 min Z2'),
             e('Mobility Flow', '15 min')
           ]),
           g('Otherwise', [ e('Full Rest', 'listen to your body') ])
-        ]
-      },
-      {
-        label: 'GATE', title: 'Phase 1 → 2 Re-Test (end of week 4)', emoji: '🎯', accent: '#7c3aed',
-        groups: [
-          g('Pass all 3 to advance to Phase 2', [
-            e('Single-Leg Leg Press', '1.5× BW pain-free → unlocks front squat'),
-            e('Shoulder Pain ≤ 1/10', 'on all lifts → unlocks clean pulls'),
-            e('Bodyweight 84.5–85 kg', 'SMM stable or up')
-          ]),
-          g('If any gate fails', [ e('Repeat Phase 1', 'another 2–4 weeks, then re-test') ])
-        ]
-      },
-      {
-        label: 'FUEL', title: 'Nutrition — Light Cut (~2,800 kcal)', emoji: '🍽️', accent: '#16a34a',
-        groups: [
-          g('Daily Targets', [
-            e('Calories', '2,800 (bump to 3,000 on Thu + Sat)'),
-            e('Protein', '175–185 g (~2.1 g/kg)'),
-            e('Carbs', '~320 g (load Thu + Sat)'),
-            e('Fat', '70–80 g')
-          ]),
-          g('Around Training', [
-            e('Pre-Workout', '30–40 g carbs + 20 g protein'),
-            e('Post-Workout', '50–70 g carbs + 30–40 g protein')
-          ]),
-          g('Tracking', [
-            e('Weigh-In', '3×/week, average it'),
-            e('Target Rate', '0.3–0.5 kg/week loss'),
-            e('If stalled 2+ weeks', 'drop 150 kcal')
-          ])
         ]
       }
     ]

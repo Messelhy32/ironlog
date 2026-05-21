@@ -1225,6 +1225,7 @@ function WeekView({ t, store, setTab }) {
   const todayIdx = mondayIndex(todayDate)
   const program = activeProgram(store)
   const programDays = program?.days || []
+  const isOffSeason = (program?.name || '').startsWith('Off-Season')
 
   const days = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(monday); d.setDate(monday.getDate() + i)
@@ -1245,6 +1246,30 @@ function WeekView({ t, store, setTab }) {
       <div className="heading" style={{
         fontSize: 12, letterSpacing: '0.2em', color: t.sub, marginBottom: 10
       }}>THIS WEEK · {WEEKDAY_LABELS[todayIdx]} {prettyDayDate(todayDate)}</div>
+
+      {isOffSeason && (
+        <Card t={t} style={{ marginBottom: 14, borderLeft: '4px solid #7c3aed' }}>
+          <div className="heading" style={{ fontSize: 12, letterSpacing: '0.12em', fontWeight: 700, marginBottom: 8 }}>
+            🎯 PHASE 1 → 2 GATE
+          </div>
+          <div style={{ fontSize: 12, color: t.sub, marginBottom: 8 }}>
+            End of week 4 — pass all 3 to advance to Phase 2:
+          </div>
+          {[
+            ['Single-leg leg press 1.5× BW', 'pain-free → unlocks front squat'],
+            ['Shoulder pain ≤ 1/10', 'on all lifts → unlocks clean pulls'],
+            ['Bodyweight 84.5–85 kg', 'SMM stable or up']
+          ].map(([crit, note]) => (
+            <div key={crit} style={{ display: 'flex', gap: 8, fontSize: 13, marginBottom: 4 }}>
+              <span style={{ color: '#7c3aed' }}>•</span>
+              <span style={{ color: t.text }}>{crit} <span style={{ color: t.sub }}>— {note}</span></span>
+            </div>
+          ))}
+          <div style={{ fontSize: 11, color: t.sub, marginTop: 6 }}>
+            Any gate fails → repeat Phase 1 for another 2–4 weeks, then re-test.
+          </div>
+        </Card>
+      )}
 
       <div style={{
         display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 6,
