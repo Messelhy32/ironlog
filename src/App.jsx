@@ -78,6 +78,16 @@ const computeStreak = (store) => {
   return streak
 }
 
+// Day chips are always shown as D1, D2, ... derived from order — never the
+// stored label. Keeps every program consistent and needs no migration.
+const dayCodeFor = (store, dayId) => {
+  for (const p of store.programs) {
+    const i = p.days.findIndex(d => String(d.id) === String(dayId))
+    if (i >= 0) return `D${i + 1}`
+  }
+  return '—'
+}
+
 // Build the library catalog from all loaded programs.
 const buildLibrary = (programs) => {
   const map = new Map()
@@ -504,6 +514,8 @@ function TodayView({ t, store, onPRToast }) {
   }, [activeDay])
 
   const day = days.find(d => String(d.id) === String(activeDay)) || days[0]
+  const dayIdx = days.findIndex(d => String(d.id) === String(day?.id))
+  const dayCode = dayIdx >= 0 ? `D${dayIdx + 1}` : ''
   const groups = day?.groups || []
   const logs = logsFor(store, dKey, day?.id)
 
@@ -555,7 +567,7 @@ function TodayView({ t, store, onPRToast }) {
         display: 'grid', gridTemplateColumns: `repeat(${days.length}, 1fr)`, gap: 6,
         marginBottom: 14
       }}>
-        {days.map(d => {
+        {days.map((d, i) => {
           const active = String(d.id) === String(activeDay)
           return (
             <button key={d.id} onClick={() => setActiveDay(d.id)} className="heading" style={{
@@ -564,7 +576,7 @@ function TodayView({ t, store, onPRToast }) {
               border: `1px solid ${active ? d.accent : t.border}`,
               color: active ? '#fff' : t.text,
               borderRadius: 10
-            }}>{d.label}</button>
+            }}>{`D${i + 1}`}</button>
           )
         })}
       </div>
@@ -575,7 +587,7 @@ function TodayView({ t, store, onPRToast }) {
           <div style={{ fontSize: 26 }}>{day?.emoji}</div>
           <div style={{ flex: 1 }}>
             <div className="heading" style={{ fontSize: 11, letterSpacing: '0.18em', color: t.sub }}>
-              {day?.label} · {prettyDayDate(new Date())}
+              {dayCode} · {prettyDayDate(new Date())}
             </div>
             <div className="heading" style={{ fontSize: 16, fontWeight: 700 }}>{day?.title}</div>
           </div>
@@ -1305,7 +1317,7 @@ function WeekView({ t, store, setTab }) {
                 {WEEKDAY_LABELS[d.idx]}
               </div>
               <div className="heading" style={{ fontSize: 12, fontWeight: 700, color: t.text, marginTop: 2 }}>
-                {dayDef?.label || '—'}
+                {dayDef ? dayCodeFor(store, dayDef.id) : '—'}
               </div>
               <div style={{ fontSize: 10, color: t.sub, marginTop: 4 }}>
                 {d.sess ? (total ? `${done}/${total}` : `${done}`) : '—'}
@@ -1318,7 +1330,7 @@ function WeekView({ t, store, setTab }) {
       <div className="heading" style={{ fontSize: 11, letterSpacing: '0.2em', color: t.sub, marginBottom: 8 }}>
         FULL WEEK PLAN — {program?.name}
       </div>
-      {programDays.map(d => (
+      {programDays.map((d, i) => (
         <button key={d.id} onClick={() => goToDay(d.id)} style={{
           width: '100%', textAlign: 'left',
           background: t.card, border: `1px solid ${t.border}`,
@@ -1329,7 +1341,7 @@ function WeekView({ t, store, setTab }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ fontSize: 22 }}>{d.emoji}</span>
             <div style={{ flex: 1 }}>
-              <div className="heading" style={{ fontSize: 13, fontWeight: 700 }}>{d.label} — {d.title}</div>
+              <div className="heading" style={{ fontSize: 13, fontWeight: 700 }}>{`D${i + 1}`} — {d.title}</div>
               <div style={{ fontSize: 11, color: t.sub, marginTop: 4 }}>
                 {(d.groups || []).map(g => g.name).join(' · ')}
               </div>
