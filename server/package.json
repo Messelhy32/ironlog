@@ -8,7 +8,8 @@
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
     "seed": "node src/seed.js",
-    "migrate:hybrid": "node src/migrate-hybrid.js"
+    "migrate:hybrid": "node src/migrate-hybrid.js",
+    "migrate:offseason": "node src/migrate-add-offseason.js"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",

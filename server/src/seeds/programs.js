@@ -6,6 +6,16 @@ import { Exercise } from '../models/Exercise.js'
 const e = (name, detail, weighted = false) => ({ name, detail, weighted })
 const g = (name, items) => ({ name, items })
 
+// Shared 8-min warm-up — every Off-Season training session (injury shield).
+const warmup = () => g('Warm-up (8 min — every session)', [
+  e('Bike or Row (easy)', '3 min'),
+  e('Spanish Squat Hold', '3×30s'),
+  e('Band External Rotation', '2×15/side'),
+  e('Wall Slides', '2×10'),
+  e('90/90 Hip Switches', '2×8/side'),
+  e('Dead Bug', '2×8/side')
+])
+
 export const PRESETS = [
   {
     name: 'Hybrid Athletic',
@@ -308,6 +318,159 @@ export const PRESETS = [
       {
         label: 'D7', title: 'REST', emoji: '💤', accent: '#7c3aed',
         groups: [ g('Rest', [ e('Light Walking', 'easy pace, 20–30 min') ]) ]
+      }
+    ]
+  },
+  {
+    name: 'Off-Season (8wk)',
+    position: 2,
+    days: [
+      {
+        label: 'MON', title: 'Upper Push + Pull — Strength', emoji: '💪', accent: '#2563eb',
+        groups: [
+          warmup(),
+          g('Strength (detail = Phase1 · Phase2)', [
+            e('Landmine Press (split stance)', 'P1 4×8/s · P2 5×5/s', true),
+            e('Chest-Supported DB Row', 'P1 4×10 · P2 4×6–8', true),
+            e('Incline DB Press', 'P1 3×10 · P2 4×6', true),
+            e('Neutral-Grip Pull-Up (or lat pulldown)', 'P1 3×AMRAP · P2 4×6–8 wtd', true),
+            e('Face Pull', '3×15', true),
+            e('Side-Lying External Rotation', '3×12/side', true)
+          ])
+        ]
+      },
+      {
+        label: 'TUE', title: 'Lower Strength — Knee-Friendly', emoji: '🦵', accent: '#dc2626',
+        groups: [
+          warmup(),
+          g('Strength (detail = Phase1 · Phase2)', [
+            e('Trap Bar Deadlift', 'P1 4×6 · P2 5×4', true),
+            e('Heel-Elevated Goblet / SSB Box Squat', 'P1 4×8 · P2 4×6', true),
+            e('Bulgarian Split Squat', 'P1 3×8/leg · P2 4×6/leg', true),
+            e('Nordic Hamstring (eccentric)', 'P1 3×5 · P2 3×6', true),
+            e('Standing Calf Raise (full ROM)', 'P1 3×12 · P2 4×10', true),
+            e('Copenhagen Plank', 'P1 3×20s/s · P2 3×30s/s')
+          ])
+        ]
+      },
+      {
+        label: 'WED', title: 'Upper Hypertrophy + Throwing Power', emoji: '🤾', accent: '#2563eb',
+        groups: [
+          warmup(),
+          g('Power', [
+            e('Med Ball Chest Pass (wall)', 'P1 4×6 max · P2 5×4 max'),
+            e('Med Ball Rotational Throw', '4×5/side')
+          ]),
+          g('Hypertrophy (detail = Phase1 · Phase2)', [
+            e('1-Arm DB Bench Press', 'P1 3×10/s · P2 4×8/s', true),
+            e('1-Arm DB Row', 'P1 3×10/s · P2 4×8/s', true),
+            e('Y-Raise (incline bench)', '3×12', true),
+            e('Hammer Curl', '3×10', true),
+            e('Triceps Pushdown', '3×12', true),
+            e('Hanging Knee Raise', 'P1 3×10 · P2 3×12', true)
+          ])
+        ]
+      },
+      {
+        label: 'THU', title: 'Lower Power + Sprint', emoji: '⚡', accent: '#dc2626',
+        groups: [
+          warmup(),
+          g('Plyo (detail = Phase1 · Phase2)', [
+            e('Pogo Hops', 'P1 3×10 · P2 3×15'),
+            e('Box Jump (soft landing)', 'P1 4×3 · P2 5×3'),
+            e('Broad Jump', 'P1 4×3 · P2 5×3'),
+            e('Lateral Bound', 'P2 only: 4×3/side'),
+            e('Single-Leg Box Jump', 'P2 only: 3×3/side')
+          ]),
+          g('Strength', [
+            e('Hip Thrust', 'P1 4×8 · P2 5×5', true),
+            e('Romanian Deadlift', 'P1 3×8 · P2 4×6', true)
+          ]),
+          g('Sprints (full rest 2–3 min)', [
+            e('Build-Ups 20m / 30m / 40m', 'P1 4×each · P2 5×each'),
+            e('Sled Push (heavy, 15–20m)', 'P1 4 reps · P2 6 reps', true)
+          ])
+        ]
+      },
+      {
+        label: 'FRI', title: 'Upper Press Volume + Carries + Core', emoji: '🏋️', accent: '#2563eb',
+        groups: [
+          warmup(),
+          g('Press + Pull (detail = Phase1 · Phase2)', [
+            e('Push-Up (regular → deficit → archer)', 'P1 4×AMRAP · P2 5×AMRAP', true),
+            e('Landmine 1-Arm Press', 'P1 3×10/s · P2 4×8/s', true),
+            e('Cable Row (heavy)', 'P1 4×10 · P2 4×8', true),
+            e('Face Pull', '3×15', true)
+          ]),
+          g('Carries + Core', [
+            e('Suitcase Carry', 'P1 3×30m/s · P2 4×30m/s', true),
+            e('Pallof Press', '3×12/side', true),
+            e('Decline Reverse Crunch', 'P1 3×12 · P2 3×15', true)
+          ])
+        ]
+      },
+      {
+        label: 'SAT', title: 'Conditioning + Reactive Agility (RSA)', emoji: '🔥', accent: '#d97706',
+        groups: [
+          g('Block A — Reactive Agility (15 min)', [
+            e('5-10-5 Shuttle', '4 reps'),
+            e('Cone Mirror Drill (partner/wall)', '4×20s'),
+            e('Backpedal-to-Sprint', '6 reps'),
+            e('Shuffle-to-Sprint', '6/direction')
+          ]),
+          g('Block B — Repeat Sprint Ability (15 min)', [
+            e('40m Sprint (walk-back ~30s)', '6 reps'),
+            e('20m Sprint (20s rest)', '8 reps'),
+            e('60m @ 80% (full recovery)', '4 reps')
+          ]),
+          g('Block C — Cool Down (10 min)', [
+            e('Couch Stretch', '2 min/side'),
+            e('90/90 Hold', '1 min/side'),
+            e('Adductor Rockback', '10 reps'),
+            e('Easy Bike', '5 min')
+          ])
+        ]
+      },
+      {
+        label: 'SUN', title: 'Full Rest or Z2 + Mobility', emoji: '💤', accent: '#16a34a',
+        groups: [
+          g('Optional (if feeling good)', [
+            e('Easy Bike or Incline Walk', '30 min Z2'),
+            e('Mobility Flow', '15 min')
+          ]),
+          g('Otherwise', [ e('Full Rest', 'listen to your body') ])
+        ]
+      },
+      {
+        label: 'GATE', title: 'Phase 1 → 2 Re-Test (end of week 4)', emoji: '🎯', accent: '#7c3aed',
+        groups: [
+          g('Pass all 3 to advance to Phase 2', [
+            e('Single-Leg Leg Press', '1.5× BW pain-free → unlocks front squat'),
+            e('Shoulder Pain ≤ 1/10', 'on all lifts → unlocks clean pulls'),
+            e('Bodyweight 84.5–85 kg', 'SMM stable or up')
+          ]),
+          g('If any gate fails', [ e('Repeat Phase 1', 'another 2–4 weeks, then re-test') ])
+        ]
+      },
+      {
+        label: 'FUEL', title: 'Nutrition — Light Cut (~2,800 kcal)', emoji: '🍽️', accent: '#16a34a',
+        groups: [
+          g('Daily Targets', [
+            e('Calories', '2,800 (bump to 3,000 on Thu + Sat)'),
+            e('Protein', '175–185 g (~2.1 g/kg)'),
+            e('Carbs', '~320 g (load Thu + Sat)'),
+            e('Fat', '70–80 g')
+          ]),
+          g('Around Training', [
+            e('Pre-Workout', '30–40 g carbs + 20 g protein'),
+            e('Post-Workout', '50–70 g carbs + 30–40 g protein')
+          ]),
+          g('Tracking', [
+            e('Weigh-In', '3×/week, average it'),
+            e('Target Rate', '0.3–0.5 kg/week loss'),
+            e('If stalled 2+ weeks', 'drop 150 kcal')
+          ])
+        ]
       }
     ]
   }
